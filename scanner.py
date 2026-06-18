@@ -1,6 +1,9 @@
 import yfinance as yf
 import pandas as pd
+
 from indicators import add_indicators
+from scoring import calculate_score, signal
+
 
 def load_watchlist(filename):
     with open(filename, "r") as f:
@@ -8,68 +11,69 @@ def load_watchlist(filename):
 
 
 def scan(symbol):
+
     try:
+
         df = yf.download(
             symbol,
-            period="6mo",
+            period="2y",
             interval="1d",
             auto_adjust=True,
-            progress=False,
-            group_by="column"
+            progress=False
         )
 
         if df.empty:
-            print(f"{symbol} : ไม่มีข้อมูล")
             return None
 
-            df = add_indicators(df)
-
-        # รองรับ yfinance เวอร์ชันใหม่
+        # รองรับ yfinance รุ่นใหม่
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
 
-        df["EMA20"] = df["Close"].ewm(span=20).mean()
+        # เพิ่ม Indicator
+        df = add_indicators(df)
 
         last = df.iloc[-1]
 
+        score, reasons = calculate_score(last)
+
         return {
-    "Symbol": symbol,
-    "Close": round(float(last["Close"]), 2),
-    "EMA20": round(float(last["EMA20"]), 2),
-    "EMA50": round(float(last["EMA50"]), 2),
-    "EMA200": round(float(last["EMA200"]), 2),
-    "RSI": round(float(last["RSI"]), 2),
-    "Above EMA20": last["Close"] > last["EMA20"]
-}
+            "Symbol": symbol,
+            "Close": round(float(last["Close"]), 2),
+            "EMA20": round(float(last["EMA20"]), 2),
+            "EMA50": round(float(last["EMA50"]), 2),
+            "EMA200": round(float(last["EMA200"]), 2),
+            "RSI": round(float(last["RSI"]), 2),
+            "Score": score,
+            "Signal": signal(score),
+            "Reason": " | ".join(reasons)
+        }
 
     except Exception as e:
-        print(f"ERROR {symbol}: {e}")
+        print(f"{symbol} : {e}")
         return None
 
 
-def main():
+def run_scanner():
 
     symbols = load_watchlist("watchlists/us100.txt")
 
     results = []
 
+    print("\nScanning...\n")
+
     for symbol in symbols:
-        print(f"Scanning {symbol}...")
 
-        r = scan(symbol)
+        result = scan(symbol)
 
-        if r:
-            results.append(r)
+        if result:
+            results.append(result)
 
     df = pd.DataFrame(results)
 
-    print("\n========== RESULT ==========\n")
-
     if df.empty:
         print("ไม่พบข้อมูล")
-    else:
-        print(df)
+        return
 
+    df = df.sort_values("Score", ascending=False)
 
-if __name__ == "__main__":
-    main()
+    print(df.to_string(index=False))

@@ -1,25 +1,20 @@
-import pandas as pd
-
+from ta.trend import EMAIndicator
+from ta.momentum import RSIIndicator
 
 def add_indicators(df):
+
     df = df.copy()
 
-    # EMA
-    df["EMA20"] = df["Close"].ewm(span=20).mean()
-    df["EMA50"] = df["Close"].ewm(span=50).mean()
-    df["EMA200"] = df["Close"].ewm(span=200).mean()
+    df["EMA20"] = EMAIndicator(df["Close"], window=20).ema_indicator()
+    df["EMA50"] = EMAIndicator(df["Close"], window=50).ema_indicator()
+    df["EMA200"] = EMAIndicator(df["Close"], window=200).ema_indicator()
 
-    # RSI 14
-    delta = df["Close"].diff()
+    df["RSI"] = RSIIndicator(df["Close"], window=14).rsi()
 
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
+    # Average Volume 20 วัน
+    df["VOL20"] = df["Volume"].rolling(20).mean()
 
-    avg_gain = gain.rolling(14).mean()
-    avg_loss = loss.rolling(14).mean()
-
-    rs = avg_gain / avg_loss
-
-    df["RSI"] = 100 - (100 / (1 + rs))
+    # Volume Ratio
+    df["VOL_RATIO"] = df["Volume"] / df["VOL20"]
 
     return df
