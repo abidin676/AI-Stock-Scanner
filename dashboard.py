@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 
 from scanner import scan, load_watchlist
-from charts import show_chart
+
 st.set_page_config(
     page_title="AI Stock Scanner",
     page_icon="🤖",
@@ -137,5 +137,3 @@ selected = st.selectbox(
     "📈 เลือกหุ้น",
     df["Symbol"]
 )
-
-show_chart(selected)
