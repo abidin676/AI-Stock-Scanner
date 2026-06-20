@@ -1,7 +1,14 @@
-from scanner import run_scanner
+import strategy
 
-print("=" * 50)
-print("🤖 AI STOCK SCANNER")
-print("=" * 50)
+print(strategy.__file__)
 
-run_scanner()
+from data import get_history
+from indicators import add_indicators
+from strategy import trend_start
+
+df = get_history("AOT", "SET")
+df = add_indicators(df)
+
+result = trend_start(df)
+
+print(result)

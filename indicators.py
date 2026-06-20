@@ -1,20 +1,31 @@
-from ta.trend import EMAIndicator
+import pandas as pd
+from ta.trend import EMAIndicator, MACD
 from ta.momentum import RSIIndicator
 
-def add_indicators(df):
 
-    df = df.copy()
+def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    เพิ่ม Indicators สำหรับ Scanner
+    """
 
-    df["EMA20"] = EMAIndicator(df["Close"], window=20).ema_indicator()
-    df["EMA50"] = EMAIndicator(df["Close"], window=50).ema_indicator()
-    df["EMA200"] = EMAIndicator(df["Close"], window=200).ema_indicator()
+    # EMA
+    df["ema9"] = EMAIndicator(df["close"], window=9).ema_indicator()
+    df["ema20"] = EMAIndicator(df["close"], window=20).ema_indicator()
+    df["ema50"] = EMAIndicator(df["close"], window=50).ema_indicator()
+    df["ema200"] = EMAIndicator(df["close"], window=200).ema_indicator()
 
-    df["RSI"] = RSIIndicator(df["Close"], window=14).rsi()
+    # RSI
+    df["rsi"] = RSIIndicator(df["close"], window=14).rsi()
 
-    # Average Volume 20 วัน
-    df["VOL20"] = df["Volume"].rolling(20).mean()
+    # MACD
+    macd = MACD(df["close"])
 
-    # Volume Ratio
-    df["VOL_RATIO"] = df["Volume"] / df["VOL20"]
+    df["macd"] = macd.macd()
+    df["macd_signal"] = macd.macd_signal()
+    df["macd_hist"] = macd.macd_diff()
+
+    # Volume
+    df["vol20"] = df["volume"].rolling(20).mean()
+    df["rvol"] = df["volume"] / df["vol20"]
 
     return df

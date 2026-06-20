@@ -1,79 +1,158 @@
-import yfinance as yf
+import os
 import pandas as pd
 
+from providers.thai import get_symbols
+from data import get_history
 from indicators import add_indicators
-from scoring import calculate_score, signal
+from strategy import trend_start
+from providers.usa import get_symbols as get_us_symbols
+from config import (
+    SCAN_MARKETS,
+    OUTPUT_FOLDER,
+    CSV_FILE,
+    EXCEL_FILE,
+    SAVE_CSV,
+    SAVE_EXCEL,
+)
+
+OUTPUT_DIR = OUTPUT_FOLDER
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
-def load_watchlist(filename):
-    with open(filename, "r") as f:
-        return [line.strip() for line in f if line.strip()]
+def scan_market(index="SET", market="SET"):
 
+    if market.upper() == "SET":
+        symbols = get_symbols(index)
 
-def scan(symbol):
+    elif market.upper() == "USA":
+        symbols = get_us_symbols(index)
 
-    try:
-
-        df = yf.download(
-            symbol,
-            period="2y",
-            interval="1d",
-            auto_adjust=True,
-            progress=False
-        )
-
-        if df.empty:
-            return None
-
-        # รองรับ yfinance รุ่นใหม่
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-
-        # เพิ่ม Indicator
-        df = add_indicators(df)
-
-        last = df.iloc[-1]
-
-        score, reasons = calculate_score(last)
-
-        return {
-            "Symbol": symbol,
-            "Close": round(float(last["Close"]), 2),
-            "EMA20": round(float(last["EMA20"]), 2),
-            "EMA50": round(float(last["EMA50"]), 2),
-            "EMA200": round(float(last["EMA200"]), 2),
-            "RSI": round(float(last["RSI"]), 2),
-            "Score": score,
-            "Signal": signal(score),
-            "Reason": " | ".join(reasons)
-        }
-
-    except Exception as e:
-        print(f"{symbol} : {e}")
-        return None
-
-
-def run_scanner():
-
-    symbols = load_watchlist("watchlists/us100.txt")
+    else:
+        raise ValueError(f"Unknown market: {market}")
 
     results = []
 
-    print("\nScanning...\n")
+    print(f"\n========== SCANNING {index} ==========\n")
+    print(f"Total Symbols : {len(symbols)}\n")
 
-    for symbol in symbols:
+    for i, symbol in enumerate(symbols, start=1):
 
-        result = scan(symbol)
+        print(f"[{i}/{len(symbols)}] {symbol}")
 
-        if result:
-            results.append(result)
+        try:
 
-    df = pd.DataFrame(results)
+            df = get_history(symbol, market)
+
+            if df.empty:
+                print("   No Data")
+                continue
+
+            df = add_indicators(df)
+
+            result = trend_start(df)
+
+            results.append({
+                "Symbol": symbol,
+                "Market": market,
+                "Signal": result["signal"],
+                "Score": result["score"],
+                "Price": result["price"],
+                "RSI": result["rsi"],
+                "RVOL": result["rvol"],
+                "Reasons": ", ".join(result["reasons"])
+            })
+
+            print(
+                f"   {result['signal']} | "
+                f"Score {result['score']}"
+            )
+
+        except Exception as e:
+
+            print(f"   ERROR : {e}")
+
+    return pd.DataFrame(results)
+
+
+def save_results(df):
 
     if df.empty:
-        print("ไม่พบข้อมูล")
+        print("\nNo Result")
         return
 
-    df = df.sort_values("Score", ascending=False)
+    csv_path = os.path.join(
+        OUTPUT_DIR,
+        "scanner_results.csv"
+    )
 
-    print(df.to_string(index=False))
+    excel_path = os.path.join(
+        OUTPUT_DIR,
+        "scanner_results.xlsx"
+    )
+
+    df.to_csv(csv_path, index=False)
+
+    df.to_excel(excel_path, index=False)
+
+    print("\nSaved")
+
+    print(csv_path)
+
+    print(excel_path)
+
+
+def show_summary(df):
+
+    if df.empty:
+        return
+
+    print("\n========== SUMMARY ==========\n")
+
+    print(df["Signal"].value_counts())
+
+    print("\nTop 10\n")
+
+    print(
+        df.sort_values(
+            by="Score",
+            ascending=False
+        ).head(10)
+    )
+
+
+def main():
+
+    all_results = []
+
+    for index, market in SCAN_MARKETS:
+
+        df = scan_market(
+            index=index,
+            market=market
+        )
+
+        all_results.append(df)
+
+    df = pd.concat(
+        all_results,
+        ignore_index=True
+    )
+
+    if df.empty:
+
+        print("No Stocks")
+
+        return
+
+    df = df.sort_values(
+        by="Score",
+        ascending=False
+    )
+
+    save_results(df)
+
+    show_summary(df)
+
+
+if __name__ == "__main__":
+    main()
