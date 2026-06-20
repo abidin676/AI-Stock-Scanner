@@ -18,6 +18,8 @@ AI Stock Scanner Configuration
 SCAN_MARKETS = [
     ("SET", "SET"),
     ("US100", "USA"),
+    ("SP500", "USA"),
+    ("DOW30", "USA"),
 ]
 
 # ==========================================

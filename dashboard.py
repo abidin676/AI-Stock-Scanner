@@ -1,139 +1,166 @@
-import streamlit as st
-import pandas as pd
+from pathlib import Path
+from datetime import datetime
 
-from scanner import scan, load_watchlist
+import pandas as pd
+import streamlit as st
+
+# ==========================================
+# PAGE
+# ==========================================
 
 st.set_page_config(
     page_title="AI Stock Scanner",
-    page_icon="🤖",
+    page_icon="📈",
     layout="wide"
 )
 
-st.title("🤖 AI Stock Scanner")
+st.title("📈 AI Stock Scanner")
 
-# =========================================
-# Sidebar
-# =========================================
+# ==========================================
+# LOAD DATA
+# ==========================================
 
-st.sidebar.header("⚙️ Scanner Settings")
+FILE = Path("output") / "scanner_results.xlsx"
 
-market = st.sidebar.selectbox(
-    "🌍 Market",
-    ["US", "SET100"]
-)
-
-signal_filter = st.sidebar.multiselect(
-    "📊 Signal",
-    ["🟢 BUY", "🟡 WATCH", "🔴 SKIP"],
-    default=["🟢 BUY", "🟡 WATCH"]
-)
-
-min_score = st.sidebar.slider(
-    "⭐ Minimum Score",
-    0,
-    100,
-    50
-)
-
-search = st.sidebar.text_input(
-    "🔍 Search Symbol"
-)
-
-if st.sidebar.button("🔄 Refresh"):
-    st.rerun()
-
-# =========================================
-# Load Watchlist
-# =========================================
-
-try:
-
-    if market == "US":
-        symbols = load_watchlist("watchlists/us100.txt")
-    else:
-        symbols = load_watchlist("watchlists/set100.txt")
-
-except FileNotFoundError:
-
-    st.warning(f"ยังไม่มี Watchlist ของ {market}")
+if not FILE.exists():
+    st.error("scanner_results.xlsx not found")
+    st.info("Run: python scanner.py")
     st.stop()
 
-# =========================================
-# Scan
-# =========================================
+df = pd.read_excel(FILE)
 
-results = []
+last_scan = datetime.fromtimestamp(
+    FILE.stat().st_mtime
+).strftime("%d/%m/%Y %H:%M:%S")
 
-with st.spinner("🔍 Scanning Stocks..."):
+st.caption(f"Last Scan : {last_scan}")
 
-    for symbol in symbols:
+# ==========================================
+# PREPARE DATA
+# ==========================================
 
-        result = scan(symbol)
+set_df = df[df["Market"] == "SET"].copy()
+usa_df = df[df["Market"] == "USA"].copy()
 
-        if result:
-            results.append(result)
 
-if not results:
+def get_top10(data):
 
-    st.error("ไม่พบข้อมูล")
-    st.stop()
+    return (
+        data
+        .sort_values(
+            ["Score", "RVOL", "RSI"],
+            ascending=[False, False, True]
+        )
+        .head(10)
+    )
 
-# =========================================
-# DataFrame
-# =========================================
 
-df = pd.DataFrame(results)
-
-df = df.sort_values("Score", ascending=False)
-
-# Filter Score
-df = df[df["Score"] >= min_score]
-
-# Filter Signal
-df = df[df["Signal"].isin(signal_filter)]
-
-# Search
-if search:
-    df = df[df["Symbol"].str.contains(search.upper())]
-
-# =========================================
-# Summary
-# =========================================
-
-buy_count = len(df[df["Signal"] == "🟢 BUY"])
-watch_count = len(df[df["Signal"] == "🟡 WATCH"])
-skip_count = len(df[df["Signal"] == "🔴 SKIP"])
-
-if len(df) > 0:
-    top_symbol = df.iloc[0]["Symbol"]
-    top_score = df.iloc[0]["Score"]
-else:
-    top_symbol = "-"
-    top_score = "-"
-
-c1, c2, c3, c4 = st.columns(4)
-
-c1.metric("🟢 BUY", buy_count)
-c2.metric("🟡 WATCH", watch_count)
-c3.metric("🔴 SKIP", skip_count)
-c4.metric("⭐ TOP", f"{top_symbol} ({top_score})")
+# ==========================================
+# SET
+# ==========================================
 
 st.divider()
 
-# =========================================
-# Result
-# =========================================
+st.subheader("🇹🇭 SET MARKET")
 
-st.success(f"พบหุ้น {len(df)} ตัว")
+c1, c2, c3 = st.columns(3)
+
+c1.metric(
+    "Stocks",
+    len(set_df)
+)
+
+c2.metric(
+    "🟢 Early Buy",
+    len(
+        set_df[
+            set_df["Signal"] == "EARLY BUY"
+        ]
+    )
+)
+
+c3.metric(
+    "🟡 Watch",
+    len(
+        set_df[
+            set_df["Signal"] == "WATCH"
+        ]
+    )
+)
+
+set_top = get_top10(set_df)
+
+st.markdown("### 🏆 Top 10")
 
 st.dataframe(
-    df,
+
+    set_top[
+        [
+            "Symbol",
+            "Score",
+            "Signal",
+            "Price",
+            "RSI",
+            "RVOL"
+        ]
+    ],
+
     use_container_width=True,
     hide_index=True
+
 )
+
+# ==========================================
+# USA
+# ==========================================
+
 st.divider()
 
-selected = st.selectbox(
-    "📈 เลือกหุ้น",
-    df["Symbol"]
+st.subheader("🇺🇸 USA MARKET")
+
+c1, c2, c3 = st.columns(3)
+
+c1.metric(
+    "Stocks",
+    len(usa_df)
+)
+
+c2.metric(
+    "🟢 Early Buy",
+    len(
+        usa_df[
+            usa_df["Signal"] == "EARLY BUY"
+        ]
+    )
+)
+
+c3.metric(
+    "🟡 Watch",
+    len(
+        usa_df[
+            usa_df["Signal"] == "WATCH"
+        ]
+    )
+)
+
+usa_top = get_top10(usa_df)
+
+st.markdown("### 🏆 Top 10")
+
+st.dataframe(
+
+    usa_top[
+        [
+            "Symbol",
+            "Score",
+            "Signal",
+            "Price",
+            "RSI",
+            "RVOL"
+        ]
+    ],
+
+    use_container_width=True,
+    hide_index=True
+
 )

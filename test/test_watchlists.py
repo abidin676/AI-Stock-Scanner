@@ -8,8 +8,7 @@ sys.path.insert(0, PROJECT_ROOT)
 WATCHLIST_DIR = Path(PROJECT_ROOT) / "watchlists"
 
 FILES = [
-    "set50.txt",
-    "set100.txt",
+    
     "set.txt",
     "us100.txt",
     "sp500.txt",
