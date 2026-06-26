@@ -17,6 +17,11 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
     # RSI
     df["rsi"] = RSIIndicator(df["close"], window=14).rsi()
+    # RSI Slope
+    df["rsi_slope"] = (
+        df["rsi"]
+        - df["rsi"].shift(5)
+)
 
     # MACD
     macd = MACD(df["close"])
@@ -24,6 +29,12 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["macd"] = macd.macd()
     df["macd_signal"] = macd.macd_signal()
     df["macd_hist"] = macd.macd_diff()
+   
+    # MACD Histogram Slope
+    df["macd_hist_slope"] = (
+        df["macd_hist"]
+        - df["macd_hist"].shift(5)
+)
 
     # Volume
     df["vol20"] = df["volume"].rolling(20).mean()
@@ -89,7 +100,10 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     # ==========================
     # EMA Slope
     # ==========================
-
+    df["ema9_slope"] = (
+        df["ema9"]
+        - df["ema9"].shift(5)
+    )
     df["ema20_slope"] = (
         df["ema20"]
         - df["ema20"].shift(5)
@@ -104,7 +118,17 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
         df["ema200"]
         - df["ema200"].shift(20)
     )
-
+    # EMA Alignment
+    df["ema_alignment"] = (
+        (
+            (df["ema9"] - df["ema20"]).abs()
+            +
+            (df["ema20"] - df["ema50"]).abs()
+        )
+        /
+        df["close"].replace(0, pd.NA)
+        * 100
+    )
     # ==========================
     # Volume Dry Up
     # ==========================
@@ -142,8 +166,8 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     # ==========================
 
     df["trend_change"] = (
-    df["higher_low"]
-    &
-    (df["ema20_slope"] > 0)
-)
+        df["higher_low"]
+        &
+        (df["ema20_slope"] > 0)
+    )
     return df
