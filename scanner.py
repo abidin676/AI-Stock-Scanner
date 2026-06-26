@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 
+from strategy import trend_start
 from providers.thai import get_symbols
 from data import get_history
 from indicators import add_indicators
@@ -143,6 +144,19 @@ def main():
         print("No Stocks")
 
         return
+
+    # ==========================
+    # Remove Duplicate Symbols
+    # ==========================
+
+    df = df.drop_duplicates(
+        subset="Symbol",
+        keep="first"
+    )
+
+    # ==========================
+    # Sort
+    # ==========================
 
     df = df.sort_values(
         by="Score",

@@ -1,32 +1,49 @@
-import subprocess
-import webbrowser
-import time
-from pathlib import Path
+import os
 
-print("=" * 50)
-print("📈 AI Stock Scanner")
-print("=" * 50)
+while True:
 
-print("\n🔍 Scanning market...\n")
+    print("\n" + "=" * 50)
+    print("        RIVER ALPHA V1.0")
+    print("=" * 50)
 
-result = subprocess.run(["python", "scanner.py"])
+    print("1. Scan Market")
+    print("2. Dashboard")
+    print("3. Backtest")
+    print("4. Equity")
+    print("5. Backtest Report")
+    print("6. Update Watchlists")
+    print("0. Exit")
 
-if result.returncode != 0:
-    print("❌ Scanner failed")
-    exit()
+    choice = input("\nSelect : ")
 
-print("\n✅ Scan completed")
+    if choice == "1":
 
-print("\n🚀 Starting Dashboard...\n")
+        os.system("python scanner.py")
 
-subprocess.Popen(
-    ["streamlit", "run", "dashboard.py"],
-    stdout=subprocess.DEVNULL,
-    stderr=subprocess.DEVNULL,
-)
+    elif choice == "2":
 
-time.sleep(5)
+        os.system("streamlit run dashboard.py")
 
-webbrowser.open("http://localhost:8501")
+    elif choice == "3":
 
-print("Dashboard opened in browser.")
+        os.system("python test/test_backtest.py")
+
+    elif choice == "4":
+
+        os.system("python equity.py")
+
+    elif choice == "5":
+
+        os.system("python backtest_report.py")
+
+    elif choice == "6":
+
+        os.system("python update_watchlists.py")
+
+    elif choice == "0":
+
+        break
+
+    else:
+
+        print("Invalid Menu")

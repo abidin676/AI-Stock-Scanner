@@ -1,71 +1,51 @@
-import os
 import sys
+from pathlib import Path
 
-# เพิ่ม Project Root เข้า Python Path
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, PROJECT_ROOT)
+sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from data import get_history
+import pandas as pd
+import yfinance as yf
+
 from indicators import add_indicators
 
+# โหลดข้อมูล
+df = yf.download(
+    "AAPL",
+    period="1y",
+    interval="1d",
+    auto_adjust=True,
+    progress=False
+)
 
-def main():
+# รองรับ yfinance MultiIndex
+if isinstance(df.columns, pd.MultiIndex):
+    df.columns = df.columns.droplevel(1)
 
-    symbol = "AOT"
+df.columns = df.columns.str.lower()
 
-    print(f"Testing Indicators : {symbol}")
+# เพิ่ม Indicators
+df = add_indicators(df)
 
-    df = get_history(symbol, "SET")
+print("\n===== Last 5 Rows =====\n")
 
-    if df.empty:
-        print("❌ No Data")
-        return
+print(df.tail()[[
+    "close",
+    "ema20",
+    "ema50",
+    "ema200",
+    "rsi",
+    "rvol",
+    "ema20_slope",
+    "ema50_slope",
+    "atr_compression",
+    "ema_compression",
+    "higher_low",
+    "higher_high",
+    "trend_change",
+    "dry_volume",
+    "move_from_low90"
+]])
 
-    df = add_indicators(df)
+print("\n===== NaN Count =====\n")
 
-    print("\n===== Last 5 Rows =====")
-
-    print(
-        df[
-            [
-                "date",
-                "close",
-                "ema9",
-                "ema20",
-                "ema50",
-                "ema200",
-                "rsi",
-                "macd",
-                "macd_signal",
-                "macd_hist",
-                "rvol",
-            ]
-        ].tail()
-    )
-
-    print("\n===== Check Columns =====")
-
-    required = [
-        "ema9",
-        "ema20",
-        "ema50",
-        "ema200",
-        "rsi",
-        "macd",
-        "macd_signal",
-        "macd_hist",
-        "rvol",
-    ]
-
-    for col in required:
-
-        if col in df.columns:
-            print(f"✅ {col}")
-        else:
-            print(f"❌ {col}")
-
-    print("\nIndicators Test Passed ✅")
-
-
-if __name__ == "__main__":
-    main()
+print(df.isna().sum())

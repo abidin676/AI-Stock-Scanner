@@ -1,9 +1,18 @@
 import pandas as pd
 
+from strategy_engine.filters import mandatory_filters
+from strategy_engine.trend import trend_score
+from strategy_engine.momentum import momentum_score
+from strategy_engine.volume import volume_score
+from strategy_engine.base import base_score
+from strategy_engine.signal import build_signal
+from strategy_engine.setup import detect_setup
 
-# ==========================================
+
+# ==========================================================
 # EMA9 Cross EMA20 ภายใน X วัน
-# ==========================================
+# ==========================================================
+
 def ema_cross_within(df, days=3):
 
     if len(df) < days + 2:
@@ -15,7 +24,7 @@ def ema_cross_within(df, days=3):
         curr = df.iloc[-(i + 1)]
 
         if (
-            prev["ema9"] < prev["ema20"]
+            prev["ema9"] <= prev["ema20"]
             and curr["ema9"] > curr["ema20"]
         ):
             return True
@@ -23,174 +32,304 @@ def ema_cross_within(df, days=3):
     return False
 
 
-# ==========================================
-# Trend Start Strategy V2
-# ==========================================
+# ==========================================================
+# River Alpha Strategy Engine
+# ==========================================================
+
 def trend_start(df):
+
+    # --------------------------------------
+    # Not enough data
+    # --------------------------------------
 
     if len(df) < 200:
 
         return {
+
             "signal": "NO DATA",
+            "setup": "-",
             "passed": False,
+
             "score": 0,
+
             "price": None,
             "rsi": None,
             "rvol": None,
-            "reasons": ["Not enough data"]
+
+            "score_breakdown": {},
+
+            "reasons": [
+                "Not enough data"
+            ],
+
         }
+
+    # --------------------------------------
+    # Last Candle
+    # --------------------------------------
 
     last = df.iloc[-1]
-    prev = df.iloc[-2]
 
-    score = 0
-    reasons = []
+    price = round(
+        float(last["close"]),
+        2
+    )
 
-    # ==========================
-    # Mandatory Filters
-    # ==========================
+    rsi = round(
+        float(last["rsi"]),
+        1
+    )
+
+    rvol = round(
+        float(last["rvol"]),
+        2
+    )
 
     distance20 = (
-        last["close"] - last["ema20"]
+        last["close"] -
+        last["ema20"]
     ) / last["ema20"]
 
-    distance50 = (
-        last["close"] - last["ema50"]
-    ) / last["ema50"]
+    # --------------------------------------
+    # Mandatory Filters
+    # --------------------------------------
 
-    # หุ้นขึ้นไกลแล้ว
-    if distance20 > 0.05:
+    result = mandatory_filters(last)
 
-        return {
-            "signal": "EXTENDED",
-            "passed": False,
-            "score": 0,
-            "price": round(float(last["close"]), 2),
-            "rsi": round(float(last["rsi"]), 1),
-            "rvol": round(float(last["rvol"]), 2),
-            "reasons": ["Price too far from EMA20"]
-        }
-
-    # RSI สูงเกิน
-    if last["rsi"] > 72:
+    if not result["passed"]:
 
         return {
-            "signal": "EXTENDED",
+
+            "signal": result["signal"],
+            "setup": "-",
             "passed": False,
+
             "score": 0,
-            "price": round(float(last["close"]), 2),
-            "rsi": round(float(last["rsi"]), 1),
-            "rvol": round(float(last["rvol"]), 2),
-            "reasons": ["RSI Overbought"]
+
+            "price": price,
+            "rsi": rsi,
+            "rvol": rvol,
+
+            "score_breakdown": {},
+
+            "reasons": [
+                result["reason"]
+            ],
+
         }
 
-    # ==========================
-    # EMA Cross
-    # ==========================
+    # --------------------------------------
+    # Initialize
+    # --------------------------------------
 
-    if ema_cross_within(df, 3):
-        score += 35
-        reasons.append("EMA9 Cross EMA20")
+    reasons = []
 
-    # ==========================
-    # Trend Alignment
-    # ==========================
+        # --------------------------------------
+    # Trend
+    # --------------------------------------
 
-    if last["ema20"] > prev["ema20"]:
-        score += 10
-        reasons.append("EMA20 Rising")
+    trend = trend_score(last)
 
-    if last["ema20"] > last["ema50"]:
-        score += 10
-        reasons.append("EMA20 > EMA50")
+    reasons.extend(trend["reasons"])
 
-    if last["ema50"] > last["ema200"]:
-        score += 10
-        reasons.append("EMA50 > EMA200")
+    # --------------------------------------
+    # Momentum
+    # --------------------------------------
 
-    # ==========================
+    momentum = momentum_score(
+        last,
+        df,
+        ema_cross_within,
+    )
+
+    reasons.extend(momentum["reasons"])
+
+    # --------------------------------------
     # Price
-    # ==========================
+    # --------------------------------------
+
+    price_score = 0
+
+    price_reasons = []
 
     if last["close"] > last["ema20"]:
-        score += 10
-        reasons.append("Close > EMA20")
+
+        price_score += 5
+        price_reasons.append("Above EMA20")
 
     if distance20 <= 0.03:
-        score += 10
-        reasons.append("Near EMA20")
 
-    # ==========================
-    # RSI
-    # ==========================
+        price_score += 5
+        price_reasons.append("Near EMA20")
 
-    if 55 <= last["rsi"] <= 65:
-        score += 10
-        reasons.append("Healthy RSI")
+    reasons.extend(price_reasons)
 
-    # ==========================
-    # Relative Volume
-    # ==========================
+    # --------------------------------------
+    # Volume
+    # --------------------------------------
 
-    if last["rvol"] >= 1.5:
-        score += 15
-        reasons.append("RVOL > 1.5")
+    volume = volume_score(last)
 
-    # ==========================
-    # MACD
-    # ==========================
+    reasons.extend(volume["reasons"])
 
-    if last["macd"] > last["macd_signal"]:
-        score += 5
-        reasons.append("MACD Bullish")
+    # --------------------------------------
+    # Base
+    # --------------------------------------
 
-    # ==========================
-    # Volume Increasing
-    # ==========================
+    base = base_score(last)
 
-    if last["volume"] > prev["volume"]:
-        score += 5
-        reasons.append("Volume Increasing")
+    reasons.extend(base["reasons"])
 
-    score = min(score, 100)
+    # --------------------------------------
+    # Overall Score
+    # --------------------------------------
 
-    # ==========================
+    overall = (
+
+        trend["score"]
+
+        + momentum["score"]
+
+        + volume["score"]
+
+        + base["score"]
+
+        + price_score
+
+    )
+
+    overall = max(
+        0,
+        min(overall, 100)
+    )
+
+        # --------------------------------------
     # Signal
-    # ==========================
+    # --------------------------------------
 
-    if (
-        score >= 90
-        and ema_cross_within(df, 3)
-        and last["rvol"] >= 1.5
-    ):
+    signal, passed = build_signal(
+        overall
+    )
 
-        signal = "EARLY BUY"
-        passed = True
+    # --------------------------------------
+    # Setup
+    # --------------------------------------
 
-    elif score >= 75:
+    setup = detect_setup(
+        last,
+        distance20,
+    )
 
-        signal = "WATCH"
-        passed = False
+    # --------------------------------------
+    # Debug
+    # --------------------------------------
 
-    else:
+    if last["symbol"] == "ITC":
 
-        signal = "SKIP"
-        passed = False
+        print("=" * 60)
+
+        print(last["symbol"])
+
+        print(
+            "Trend    :",
+            trend["score"]
+        )
+
+        print(
+            "Momentum :",
+            momentum["score"]
+        )
+
+        print(
+            "Volume   :",
+            volume["score"]
+        )
+
+        print(
+            "Base     :",
+            base["score"]
+        )
+
+        print(
+            "Price    :",
+            price_score
+        )
+
+        print(
+            "TOTAL    :",
+            overall
+        )
+
+        print()
+
+        print("Reasons")
+
+        for r in reasons:
+
+            print("-", r)
+
+        print("=" * 60)
+
+        # --------------------------------------
+    # Score Breakdown
+    # --------------------------------------
+
+    score_breakdown = {
+
+        "Trend": trend,
+
+        "Momentum": momentum,
+
+        "Volume": volume,
+
+        "Base": base,
+
+        "Price": {
+
+            "score": price_score,
+
+            "max_score": 10,
+
+            "quality": (
+
+                "EXCELLENT"
+                if price_score == 10
+
+                else "GOOD"
+                if price_score == 5
+
+                else "WEAK"
+
+            ),
+
+            "reasons": price_reasons,
+
+        },
+
+    }
+
+    # --------------------------------------
+    # Return
+    # --------------------------------------
 
     return {
 
         "signal": signal,
 
+        "setup": setup,
+
         "passed": passed,
 
-        "score": score,
+        "score": overall,
 
-        "price": round(float(last["close"]), 2),
+        "price": price,
 
-        "rsi": round(float(last["rsi"]), 1),
+        "rsi": rsi,
 
-        "rvol": round(float(last["rvol"]), 2),
+        "rvol": rvol,
 
-        "reasons": reasons
+        "score_breakdown": score_breakdown,
 
-    }
+        "reasons": reasons,
+
+    }    

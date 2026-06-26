@@ -9,11 +9,8 @@ def format_symbol(symbol: str, market: str) -> str:
 
     if market == "SET":
 
-        # ถ้ามี .BK อยู่แล้ว ไม่ต้องเติม
-        if symbol.endswith(".BK"):
-            return symbol
-
-        return symbol + ".BK"
+        if not symbol.endswith(".BK"):
+            symbol += ".BK"
 
     return symbol
 
@@ -22,8 +19,9 @@ def get_history(
     symbol,
     market="USA",
     period="1y",
-    interval="1d"
+    interval="1d",
 ):
+
     ticker = format_symbol(symbol, market)
 
     df = yf.download(
@@ -37,27 +35,31 @@ def get_history(
     if df.empty:
         return pd.DataFrame()
 
-    # แก้ปัญหา MultiIndex ของ yfinance
+    # แก้ MultiIndex ของ yfinance
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
+    # ย้าย Date มาเป็นคอลัมน์
     df.reset_index(inplace=True)
 
+    # ชื่อคอลัมน์เป็นตัวเล็กทั้งหมด
     df.columns = [str(col).lower() for col in df.columns]
 
     df["symbol"] = symbol.upper()
     df["market"] = market.upper()
+
     df = df[
-    [
-        "date",
-        "open",
-        "high",
-        "low",
-        "close",
-        "volume",
-        "symbol",
-        "market",
+        [
+            "date",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "symbol",
+            "market",
+        ]
     ]
-]
 
     return df
+

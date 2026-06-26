@@ -67,3 +67,33 @@ SAVE_CSV = True
 USE_CACHE = False
 
 MAX_WORKERS = 8
+
+# ===============================
+# Backtest
+# ===============================
+
+LOOKBACK = 250
+MAX_HOLD = 20
+
+STOP_LOSS = -8
+TAKE_PROFIT = 30
+
+# ===============================
+# Portfolio
+# ===============================
+
+START_CAPITAL = 100000
+RISK_PER_TRADE = 1.0
+
+
+# ==========================
+# Portfolio
+# ==========================
+
+START_CAPITAL = 100000
+
+MAX_POSITIONS = 5
+
+POSITION_SIZE = 0.20      # 20%
+
+RISK_PER_TRADE = 1.0

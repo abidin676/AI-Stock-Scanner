@@ -1,0 +1,74 @@
+def momentum_score(last, df, ema_cross_func):
+
+    score = 0
+    reasons = []
+
+    # ======================================
+    # Fresh EMA Cross (10)
+    # ======================================
+
+    if ema_cross_func(df, 3):
+        score += 10
+        reasons.append("Fresh EMA Cross")
+
+    elif ema_cross_func(df, 5):
+        score += 5
+        reasons.append("Recent EMA Cross")
+
+    # ======================================
+    # EMA9 Momentum (5)
+    # ======================================
+
+    if last["ema9"] > last["ema20"]:
+        score += 5
+        reasons.append("EMA9 Above EMA20")
+
+    # ======================================
+    # MACD (5)
+    # ======================================
+
+    if last["macd"] > last["macd_signal"]:
+        score += 3
+        reasons.append("MACD Bullish")
+
+    if last["macd_hist"] > 0:
+        score += 2
+        reasons.append("MACD Histogram Positive")
+
+    # ======================================
+    # RSI (5)
+    # ======================================
+
+    if 50 <= last["rsi"] <= 65:
+        score += 5
+        reasons.append("Healthy RSI")
+
+    elif 45 <= last["rsi"] < 50:
+        score += 2
+        reasons.append("RSI Recovering")
+
+    # ======================================
+    # Quality
+    # ======================================
+
+    if score >= 22:
+        quality = "EXCELLENT"
+
+    elif score >= 17:
+        quality = "STRONG"
+
+    elif score >= 12:
+        quality = "GOOD"
+
+    elif score >= 6:
+        quality = "NORMAL"
+
+    else:
+        quality = "WEAK"
+
+    return {
+        "score": score,
+        "max_score": 25,
+        "quality": quality,
+        "reasons": reasons,
+    }
