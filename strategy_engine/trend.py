@@ -63,6 +63,7 @@ def trend_score(last):
         quality = "WEAK"
 
     return {
+        "engine": "trend",
         "score": score,
         "max_score": 30,
         "quality": quality,

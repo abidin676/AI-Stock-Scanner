@@ -65,8 +65,9 @@ def volume_score(last):
         quality = "WEAK"
 
     return {
+        "engine": "volume",
         "score": min(score, 20),
-        "max_score": 20,
+        "max_score": 25,
         "quality": quality,
         "reasons": reasons,
     }

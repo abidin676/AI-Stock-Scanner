@@ -67,6 +67,7 @@ def momentum_score(last, df, ema_cross_func):
         quality = "WEAK"
 
     return {
+        "engine": "momentum",
         "score": score,
         "max_score": 25,
         "quality": quality,

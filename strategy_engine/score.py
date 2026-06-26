@@ -33,4 +33,8 @@ def calculate_score(df):
 
         score -= 30
 
-    return score, reasons
+    return {
+        "engine": "stage",
+        "score": score,
+        "reasons": reasons,
+    }

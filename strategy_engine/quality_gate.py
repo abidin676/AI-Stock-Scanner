@@ -59,6 +59,7 @@ def quality_gate(
         grade = "D"
 
     return {
+        "engine": "quality_gate",
         "passed": passed,
         "grade": grade,
         "reasons": reasons,

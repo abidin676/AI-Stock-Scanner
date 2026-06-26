@@ -17,4 +17,8 @@ def build_signal(score):
 
     passed = score >= 80
 
-    return signal, passed
+    return {
+        "engine": "stage",
+        "score": score,
+        "reasons": reasons,
+    }

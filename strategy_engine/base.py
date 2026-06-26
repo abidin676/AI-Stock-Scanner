@@ -72,6 +72,7 @@ def base_score(last):
         quality = "WEAK"
 
     return {
+        "engine": "base",
         "score": score,
         "max_score": 15,
         "quality": quality,
