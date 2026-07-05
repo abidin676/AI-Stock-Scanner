@@ -117,6 +117,29 @@ def watchlist_label(row):
     )
 
 
+def first_existing_number(row, columns):
+
+    for column in columns:
+        if column in row:
+            return safe_number(row.get(column, 0))
+
+    return 0
+
+
+def selected_candidate_row(candidates, selected):
+
+    symbol, market = [
+        part.strip()
+        for part in selected.split("|")[:2]
+    ]
+
+    return candidates[
+        (candidates["Symbol"] == symbol)
+        &
+        (candidates["Market"] == market)
+    ].iloc[0]
+
+
 def apply_filters(df, market_filter, signal_filter, symbol_search):
 
     data = df.copy()
@@ -320,6 +343,28 @@ def render_add_to_watchlist(df):
             "Candidate",
             labels,
         )
+        row = selected_candidate_row(
+            candidates,
+            selected,
+        )
+        stop_loss_default = first_existing_number(
+            row,
+            [
+                "StopLoss",
+                "Stop Loss",
+                "Stop_Loss",
+                "SL",
+            ],
+        )
+        target_default = first_existing_number(
+            row,
+            [
+                "Target",
+                "TakeProfit",
+                "Take Profit",
+                "TP",
+            ],
+        )
         note = st.text_input(
             "Note",
             value="",
@@ -327,13 +372,13 @@ def render_add_to_watchlist(df):
         stop_loss = st.number_input(
             "Stop Loss",
             min_value=0.0,
-            value=0.0,
+            value=stop_loss_default,
             step=0.01,
         )
         target = st.number_input(
             "Target",
             min_value=0.0,
-            value=0.0,
+            value=target_default,
             step=0.01,
         )
         submitted = st.form_submit_button(
@@ -342,16 +387,6 @@ def render_add_to_watchlist(df):
 
     if not submitted:
         return
-
-    symbol, market = [
-        part.strip()
-        for part in selected.split("|")[:2]
-    ]
-    row = candidates[
-        (candidates["Symbol"] == symbol)
-        &
-        (candidates["Market"] == market)
-    ].iloc[0]
 
     add_to_watchlist(
         row["Symbol"],

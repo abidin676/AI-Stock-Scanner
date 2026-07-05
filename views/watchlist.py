@@ -196,8 +196,12 @@ def render_buy_form(watchlist):
         )
 
     if submitted:
-        if entry_price <= 0 or shares <= 0:
-            st.error("Entry Price and Shares are required")
+        if entry_price <= 0:
+            st.error("Entry Price must be greater than 0")
+            return
+
+        if shares <= 0:
+            st.error("Shares must be greater than 0")
             return
 
         add_position(
