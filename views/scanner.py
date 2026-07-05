@@ -24,6 +24,13 @@ DISPLAY_COLUMNS = [
     "RSI",
     "RVOL",
 ]
+ROW_COLORS = {
+    "BUY": "background-color: #dcfce7",
+    "WATCH": "background-color: #dbeafe",
+    "EARLY": "background-color: #fef9c3",
+    "EXTENDED": "background-color: #ffedd5",
+    "SKIP": "background-color: #f3f4f6",
+}
 
 
 def signal_group(signal):
@@ -88,7 +95,7 @@ def visible_columns(df):
     ]
 
 
-def apply_filters(df, market_filter, signal_filter):
+def apply_filters(df, market_filter, signal_filter, symbol_search):
 
     data = df.copy()
 
@@ -100,7 +107,44 @@ def apply_filters(df, market_filter, signal_filter):
             data["_signal_group"].isin(signal_filter)
         ]
 
+    symbol_search = symbol_search.strip().upper()
+
+    if symbol_search:
+        data = data[
+            data["Symbol"].astype(str).str.upper().str.contains(
+                symbol_search,
+                regex=False,
+            )
+        ]
+
     return sort_results(data)
+
+
+def styled_table(df):
+
+    display = df[visible_columns(df)].reset_index(
+        drop=True
+    )
+    groups = df["_signal_group"].reset_index(
+        drop=True
+    )
+
+    def highlight_row(row):
+
+        style = ROW_COLORS.get(
+            groups.iloc[row.name],
+            "",
+        )
+
+        return [
+            style
+            for _ in row
+        ]
+
+    return display.style.apply(
+        highlight_row,
+        axis=1,
+    )
 
 
 def build_market_summary(df):
@@ -172,7 +216,7 @@ def render_top_market(df, market):
         return
 
     st.dataframe(
-        top[visible_columns(top)],
+        styled_table(top),
         use_container_width=True,
         hide_index=True,
     )
@@ -205,6 +249,12 @@ def scanner_page():
             "SET",
             "USA",
         ],
+    )
+
+    symbol_search = st.sidebar.text_input(
+        "Symbol Search",
+        value="",
+        placeholder="AAPL, PTT, DUK",
     )
 
     signal_filter = st.sidebar.multiselect(
@@ -243,6 +293,7 @@ def scanner_page():
         df,
         market_filter,
         signal_filter,
+        symbol_search,
     )
 
     st.subheader("Scanner Results")
@@ -252,7 +303,7 @@ def scanner_page():
         return
 
     st.dataframe(
-        filtered[visible_columns(filtered)],
+        styled_table(filtered),
         use_container_width=True,
         hide_index=True,
     )
