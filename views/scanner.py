@@ -5,153 +5,254 @@ import pandas as pd
 import streamlit as st
 
 
-def scanner_page():
+RESULT_FILE = Path("output") / "scanner_results.xlsx"
+SIGNAL_ORDER = {
+    "BUY": 0,
+    "WATCH": 1,
+    "EARLY": 2,
+    "EXTENDED": 3,
+    "SKIP": 4,
+    "OTHER": 5,
+}
+DISPLAY_COLUMNS = [
+    "Symbol",
+    "Market",
+    "Signal",
+    "Setup",
+    "Score",
+    "Price",
+    "RSI",
+    "RVOL",
+]
 
-    st.title("📈 River Alpha Scanner")
 
-    FILE = Path("output") / "scanner_results.xlsx"
+def signal_group(signal):
 
-    if not FILE.exists():
-        st.error("scanner_results.xlsx not found")
-        st.info("Run : python scanner.py")
+    signal = str(signal)
+
+    if "BUY" in signal:
+        return "BUY"
+
+    if "WATCH" in signal:
+        return "WATCH"
+
+    if "EARLY" in signal:
+        return "EARLY"
+
+    if "EXTENDED" in signal:
+        return "EXTENDED"
+
+    if "SKIP" in signal:
+        return "SKIP"
+
+    return "OTHER"
+
+
+def prepare_data(df):
+
+    df = df.copy()
+    df["_signal_group"] = df["Signal"].apply(signal_group)
+    df["_signal_rank"] = df["_signal_group"].map(
+        SIGNAL_ORDER
+    ).fillna(
+        SIGNAL_ORDER["OTHER"]
+    )
+
+    return df
+
+
+def sort_results(df):
+
+    return df.sort_values(
+        [
+            "_signal_rank",
+            "Score",
+            "RVOL",
+            "RSI",
+        ],
+        ascending=[
+            True,
+            False,
+            False,
+            True,
+        ],
+    )
+
+
+def visible_columns(df):
+
+    return [
+        column
+        for column in DISPLAY_COLUMNS
+        if column in df.columns
+    ]
+
+
+def apply_filters(df, market_filter, signal_filter):
+
+    data = df.copy()
+
+    if market_filter != "ALL":
+        data = data[data["Market"] == market_filter]
+
+    if "ALL" not in signal_filter:
+        data = data[
+            data["_signal_group"].isin(signal_filter)
+        ]
+
+    return sort_results(data)
+
+
+def build_market_summary(df):
+
+    rows = []
+
+    for market in ("SET", "USA"):
+
+        data = df[df["Market"] == market]
+
+        rows.append({
+            "Market": market,
+            "Stocks": len(data),
+            "BUY": int((data["_signal_group"] == "BUY").sum()),
+            "WATCH": int((data["_signal_group"] == "WATCH").sum()),
+            "EARLY": int((data["_signal_group"] == "EARLY").sum()),
+            "EXTENDED": int((data["_signal_group"] == "EXTENDED").sum()),
+            "SKIP": int((data["_signal_group"] == "SKIP").sum()),
+            "Avg Score": round(data["Score"].mean(), 1)
+            if not data.empty
+            else 0,
+            "Max Score": data["Score"].max()
+            if not data.empty
+            else 0,
+        })
+
+    return pd.DataFrame(rows)
+
+
+def render_summary(df):
+
+    summary = build_market_summary(df)
+
+    st.subheader("Market Summary")
+
+    metric_cols = st.columns(2)
+
+    for index, market in enumerate(("SET", "USA")):
+
+        data = summary[summary["Market"] == market].iloc[0]
+
+        with metric_cols[index]:
+            c1, c2, c3 = st.columns(3)
+            c1.metric(f"{market} Stocks", int(data["Stocks"]))
+            c2.metric(f"{market} BUY", int(data["BUY"]))
+            c3.metric(f"{market} Max", int(data["Max Score"]))
+
+    st.dataframe(
+        summary,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+def render_top_market(df, market):
+
+    st.subheader(f"Top {market}")
+
+    top = sort_results(
+        df[
+            (df["Market"] == market)
+            &
+            (df["_signal_group"] != "SKIP")
+        ]
+    ).head(10)
+
+    if top.empty:
+        st.info(f"No {market} results")
         return
 
-    df = pd.read_excel(FILE)
+    st.dataframe(
+        top[visible_columns(top)],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+def scanner_page():
+
+    st.title("River Alpha Scanner")
+
+    if not RESULT_FILE.exists():
+        st.error("scanner_results.xlsx not found")
+        st.info("Run: python scanner.py")
+        return
+
+    df = pd.read_excel(RESULT_FILE)
+    df = prepare_data(df)
 
     last_scan = datetime.fromtimestamp(
-        FILE.stat().st_mtime
+        RESULT_FILE.stat().st_mtime
     ).strftime("%d/%m/%Y %H:%M:%S")
 
-    st.caption(f"Last Scan : {last_scan}")
+    st.caption(f"Last Scan: {last_scan}")
 
-    set_df = df[df["Market"] == "SET"].copy()
-    usa_df = df[df["Market"] == "USA"].copy()
+    st.sidebar.header("Filter")
 
-    st.sidebar.header("⚙️ Filter")
-
-    min_score = st.sidebar.slider(
-        "Minimum Score",
-        50,
-        100,
-        70
+    market_filter = st.sidebar.selectbox(
+        "Market",
+        [
+            "ALL",
+            "SET",
+            "USA",
+        ],
     )
 
     signal_filter = st.sidebar.multiselect(
         "Signal",
         [
-            "🚀 ELITE",
-            "🟢 BUY",
-            "👀 WATCH",
-            "🌱 EARLY"
+            "ALL",
+            "BUY",
+            "WATCH",
+            "EARLY",
+            "EXTENDED",
+            "SKIP",
         ],
         default=[
-            "🚀 ELITE",
-            "🟢 BUY",
-            "👀 WATCH",
-            "🌱 EARLY"
-        ]
+            "BUY",
+            "WATCH",
+            "EARLY",
+            "EXTENDED",
+        ],
     )
 
-    def get_top(data):
-
-        data = data[data["Score"] >= min_score]
-
-        data = data[
-            data["Signal"].isin(signal_filter)
-        ]
-
-        return (
-            data.sort_values(
-                ["Score", "RVOL", "RSI"],
-                ascending=[False, False, True]
-            )
-            .head(20)
-        )
-
-    # ==========================
-    # SET
-    # ==========================
+    render_summary(df)
 
     st.divider()
 
-    st.subheader("🇹🇭 TH SET MARKET")
+    top_cols = st.columns(2)
 
-    c1, c2, c3, c4, c5 = st.columns(5)
+    with top_cols[0]:
+        render_top_market(df, "SET")
 
-    c1.metric("Stocks", len(set_df))
-    c2.metric("🚀 ELITE", len(set_df[set_df["Signal"] == "🚀 ELITE"]))
-    c3.metric("🟢 BUY", len(set_df[set_df["Signal"] == "🟢 BUY"]))
-    c4.metric("👀 WATCH", len(set_df[set_df["Signal"] == "👀 WATCH"]))
-    c5.metric("🌱 EARLY", len(set_df[set_df["Signal"] == "🌱 EARLY"]))
-
-    set_top = get_top(set_df)
-
-    st.markdown(f"### 🏆 Score ≥ {min_score}")
-
-    if set_top.empty:
-
-        st.info("ไม่มีหุ้น SET ตามเงื่อนไข")
-
-    else:
-
-        columns = [
-            "Symbol",
-            "Score",
-            "Signal",
-            "Price",
-            "RSI",
-            "RVOL",
-        ]
-
-        if "Setup" in set_top.columns:
-            columns.insert(2, "Setup")
-
-        st.dataframe(
-            set_top[columns],
-            use_container_width=True,
-            hide_index=True
-        )
-
-    # ==========================
-    # USA
-    # ==========================
+    with top_cols[1]:
+        render_top_market(df, "USA")
 
     st.divider()
 
-    st.subheader("🇺🇸 USA MARKET")
+    filtered = apply_filters(
+        df,
+        market_filter,
+        signal_filter,
+    )
 
-    c1, c2, c3, c4, c5 = st.columns(5)
+    st.subheader("Scanner Results")
 
-    c1.metric("Stocks", len(usa_df))
-    c2.metric("🚀 ELITE", len(usa_df[usa_df["Signal"] == "🚀 ELITE"]))
-    c3.metric("🟢 BUY", len(usa_df[usa_df["Signal"] == "🟢 BUY"]))
-    c4.metric("👀 WATCH", len(usa_df[usa_df["Signal"] == "👀 WATCH"]))
-    c5.metric("🌱 EARLY", len(usa_df[usa_df["Signal"] == "🌱 EARLY"]))
+    if filtered.empty:
+        st.info("No results")
+        return
 
-    usa_top = get_top(usa_df)
-
-    st.markdown(f"### 🏆 Score ≥ {min_score}")
-
-    if usa_top.empty:
-
-        st.info("ไม่มีหุ้น USA ตามเงื่อนไข")
-
-    else:
-
-        columns = [
-            "Symbol",
-            "Score",
-            "Signal",
-            "Price",
-            "RSI",
-            "RVOL",
-        ]
-
-        if "Setup" in usa_top.columns:
-            columns.insert(2, "Setup")
-
-        st.dataframe(
-            usa_top[columns],
-            use_container_width=True,
-            hide_index=True
-        )
+    st.dataframe(
+        filtered[visible_columns(filtered)],
+        use_container_width=True,
+        hide_index=True,
+    )
