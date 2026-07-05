@@ -13,6 +13,44 @@ from portfolio import (
 
 
 SCANNER_FILE = Path("output") / "scanner_results.xlsx"
+OPEN_COLUMNS = [
+    "Symbol",
+    "Market",
+    "EntryDate",
+    "EntryPrice",
+    "Shares",
+    "Setup",
+    "Score",
+    "Status",
+    "BuyAmount",
+    "BuyFee",
+    "NetCost",
+    "LastPrice",
+    "CurrentValue",
+    "UnrealizedNetPL",
+    "UnrealizedNetPLPct",
+]
+CLOSED_COLUMNS = [
+    "Symbol",
+    "Market",
+    "EntryDate",
+    "EntryPrice",
+    "Shares",
+    "Setup",
+    "Score",
+    "Status",
+    "ExitDate",
+    "ExitPrice",
+    "BuyAmount",
+    "BuyFee",
+    "NetCost",
+    "SellAmount",
+    "SellFee",
+    "NetProceeds",
+    "GrossPL",
+    "NetPL",
+    "NetPLPct",
+]
 
 
 @st.cache_data(ttl=900)
@@ -41,6 +79,30 @@ def load_scanner_candidates():
     return pd.read_excel(SCANNER_FILE)
 
 
+def available_columns(df, columns):
+
+    return [
+        column
+        for column in columns
+        if column in df.columns
+    ]
+
+
+def sum_column(df, column):
+
+    if column not in df:
+        return 0
+
+    return float(
+        pd.to_numeric(
+            df[column],
+            errors="coerce",
+        )
+        .fillna(0)
+        .sum()
+    )
+
+
 def enrich_open_positions(df):
 
     if df.empty:
@@ -55,32 +117,39 @@ def enrich_open_positions(df):
             row["Market"],
         )
 
-        entry_price = float(row["EntryPrice"])
         shares = float(row["Shares"])
-        total_cost = entry_price * shares
+        net_cost = float(row["NetCost"])
 
         if latest_price is None:
             current_value = None
-            pnl_pct = None
+            unrealized_net_pl = None
+            unrealized_net_pl_pct = None
         else:
             current_value = latest_price * shares
-            pnl_pct = (
-                (current_value - total_cost)
-                / total_cost
+            unrealized_net_pl = current_value - net_cost
+            unrealized_net_pl_pct = (
+                unrealized_net_pl
+                / net_cost
                 * 100
+                if net_cost
+                else 0
             )
 
         data = row.to_dict()
         data["LastPrice"] = latest_price
-        data["TotalCost"] = round(total_cost, 2)
         data["CurrentValue"] = (
             round(current_value, 2)
             if current_value is not None
             else None
         )
-        data["Unrealized P/L %"] = (
-            round(pnl_pct, 2)
-            if pnl_pct is not None
+        data["UnrealizedNetPL"] = (
+            round(unrealized_net_pl, 2)
+            if unrealized_net_pl is not None
+            else None
+        )
+        data["UnrealizedNetPLPct"] = (
+            round(unrealized_net_pl_pct, 2)
+            if unrealized_net_pl_pct is not None
             else None
         )
         rows.append(data)
@@ -255,29 +324,41 @@ def portfolio_page():
         open_positions
     )
 
-    total_cost = (
-        enriched_open["TotalCost"].sum()
-        if "TotalCost" in enriched_open
-        else 0
+    total_fees = (
+        sum_column(portfolio, "BuyFee")
+        + sum_column(closed_positions, "SellFee")
     )
-    current_value = (
-        enriched_open["CurrentValue"].sum()
-        if "CurrentValue" in enriched_open
-        else 0
+    net_cost = sum_column(
+        enriched_open,
+        "NetCost",
     )
-    pnl_pct = (
-        (current_value - total_cost)
-        / total_cost
+    current_value = sum_column(
+        enriched_open,
+        "CurrentValue",
+    )
+    unrealized_net_pl = sum_column(
+        enriched_open,
+        "UnrealizedNetPL",
+    )
+    unrealized_net_pl_pct = (
+        unrealized_net_pl
+        / net_cost
         * 100
-        if total_cost
+        if net_cost
         else 0
+    )
+    realized_net_pl = sum_column(
+        closed_positions,
+        "NetPL",
     )
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Open Positions", len(open_positions))
-    c2.metric("Total Cost", f"{total_cost:,.2f}")
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric("Total Fees", f"{total_fees:,.2f}")
+    c2.metric("Net Cost", f"{net_cost:,.2f}")
     c3.metric("Current Value", f"{current_value:,.2f}")
-    c4.metric("Unrealized P/L %", f"{pnl_pct:.2f}%")
+    c4.metric("Unrealized Net P/L", f"{unrealized_net_pl:,.2f}")
+    c5.metric("Unrealized Net P/L %", f"{unrealized_net_pl_pct:.2f}%")
+    c6.metric("Realized Net P/L", f"{realized_net_pl:,.2f}")
 
     st.divider()
 
@@ -297,7 +378,12 @@ def portfolio_page():
         st.info("No open positions")
     else:
         st.dataframe(
-            enriched_open,
+            enriched_open[
+                available_columns(
+                    enriched_open,
+                    OPEN_COLUMNS,
+                )
+            ],
             use_container_width=True,
             hide_index=True,
         )
@@ -308,7 +394,12 @@ def portfolio_page():
         st.info("No closed positions")
     else:
         st.dataframe(
-            closed_positions,
+            closed_positions[
+                available_columns(
+                    closed_positions,
+                    CLOSED_COLUMNS,
+                )
+            ],
             use_container_width=True,
             hide_index=True,
         )
