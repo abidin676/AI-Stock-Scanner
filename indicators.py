@@ -246,7 +246,6 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
         &
         (df["close"] > df["ema20"])
     )
-    return df
 
 
 # ==========================
@@ -288,3 +287,5 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
         &
         df["break20"]
     )
+
+    return df
