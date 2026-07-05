@@ -257,26 +257,16 @@ def main():
         ignore_index=True
     )
 
-    if df.empty:
-
-        print("No Stocks")
-
-        return
-
     before_dedupe = len(df)
 
-    df = df.sort_values(
-        by="Score",
-        ascending=False
-    )
-
-    df = df.drop_duplicates(
-        subset=[
-            "Market",
-            "Symbol",
-        ],
-        keep="first",
-    )
+    if not df.empty:
+        df = df.drop_duplicates(
+            subset=[
+                "Symbol",
+                "Market",
+            ],
+            keep="first",
+        )
 
     removed = before_dedupe - len(df)
 
@@ -284,6 +274,12 @@ def main():
         print(
             f"Removed duplicate symbols: {removed}"
         )
+
+    if df.empty:
+
+        print("No Stocks")
+
+        return
 
     df = df.sort_values(
         by="Score",
