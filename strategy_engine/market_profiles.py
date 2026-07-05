@@ -33,12 +33,13 @@ MARKET_PROFILES = {
         },
 
         "weights": {
-            "trend": 30,
-            "momentum": 25,
-            "volume": 25,
-            "base": 15,
-            "price": 10,
-            "stage": 20,
+            "trend": 25,
+            "momentum": 20,
+            "volume": 15,
+            "base": 10,
+            "price": 5,
+            "stage": 15,
+            "breakout": 10,
         },
 
         "trend": {
@@ -86,12 +87,13 @@ MARKET_PROFILES = {
         },
 
         "weights": {
-            "trend": 30,
-            "momentum": 25,
-            "volume": 25,
-            "base": 15,
-            "price": 10,
-            "stage": 20,
+            "trend": 25,
+            "momentum": 20,
+            "volume": 15,
+            "base": 10,
+            "price": 5,
+            "stage": 15,
+            "breakout": 10,
         },
 
         "trend": {

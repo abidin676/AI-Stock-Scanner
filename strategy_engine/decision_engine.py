@@ -23,7 +23,8 @@ from strategy_engine.momentum import momentum_score
 from strategy_engine.volume import volume_score
 from strategy_engine.base import base_score
 from strategy_engine.quality_gate import quality_gate
-from strategy_engine.score import calculate_score
+from strategy_engine.market_profiles import get_profile
+from strategy_engine.score import calculate_score, calculate_weighted_score
 from strategy_engine.signal import build_signal
 from strategy_engine.price import price_score
 from strategy_engine.trend import trend_score
@@ -115,49 +116,46 @@ def make_decision(
 
     stage = calculate_score(df)
 
+    engine_results = {
+        "trend": trend,
+        "momentum": momentum,
+        "volume": volume,
+        "base": base,
+        "price": price,
+        "stage": stage,
+        "breakout": breakout,
+    }
+
     # -------------------------
-    # Total Score
+    # Weighted Score
     # -------------------------
 
-    total_score = (
-        trend["score"]
-        + momentum["score"]
-        + volume["score"]
-        + base["score"]
-        + breakout["score"]
-        + price["score"]
-        + stage["score"]
+    profile = get_profile(market)
+
+    score = calculate_weighted_score(
+        engine_results,
+        profile["weights"],
     )
-    max_score = (
-        trend["max_score"]
-        + momentum["max_score"]
-        + volume["max_score"]
-        + base["max_score"]
-        + breakout["max_score"]
-        + price["max_score"]
-        + stage["max_score"]
-    )
+
+    for engine, weighted in score["weighted_breakdown"].items():
+        engine_results[engine]["weight"] = weighted["weight"]
+        engine_results[engine]["weighted_score"] = weighted["weighted_score"]
+
 # -------------------------
 # DEBUG
 # -------------------------
 
-    score_percent = round(
-        total_score / max_score * 100
-    )
-
     print(
         f"[DEBUG] {symbol} | "
         f"Market={market} | "
-        f"Score={total_score}/{max_score} "
-        f"({score_percent}%)"
+        f"Raw={score['raw_total_score']}/{score['raw_max_score']} "
+        f"({score['raw_score_percent']}%) | "
+        f"Weighted={score['weighted_total_score']}/100 "
+        f"({score['score_percent']}%)"
     )
 # -------------------------
 # Signal
 # -------------------------
-
-    score_percent = round(
-        total_score / max_score * 100
-)
 
     if gate["passed"]:
 
@@ -168,15 +166,15 @@ def make_decision(
             f"Market   : {market}"
         )
         print(
-            f"Score    : {total_score}/{max_score}"
+            f"Raw Score: {score['raw_total_score']}/{score['raw_max_score']}"
         )
         print(
-            f"Percent  : {score_percent}%"
+            f"Weighted : {score['weighted_total_score']}/100"
         )
 
         signal = build_signal(
-            total_score,
-            max_score,
+            score["weighted_total_score"],
+            score["weighted_max_score"],
             market,
         )
 
@@ -194,10 +192,10 @@ def make_decision(
             f"Market   : {market}"
         )
         print(
-            f"Score    : {total_score}/{max_score}"
+            f"Raw Score: {score['raw_total_score']}/{score['raw_max_score']}"
         )
         print(
-            f"Percent  : {score_percent}%"
+            f"Weighted : {score['weighted_total_score']}/100"
         )
         print(
             f"Gate     : FAILED"
@@ -208,7 +206,7 @@ def make_decision(
             "engine": "signal",
             "signal": "SKIP",
             "passed": False,
-            "score_percent": score_percent,
+            "score_percent": score["score_percent"],
         }
 
     # -------------------------
@@ -235,9 +233,17 @@ def make_decision(
 
     return {
 
-        "total_score": total_score,
+        "total_score": score["raw_total_score"],
         
-        "max_score": max_score,
+        "max_score": score["raw_max_score"],
+
+        "raw_score_percent": score["raw_score_percent"],
+
+        "weighted_score": score["weighted_total_score"],
+
+        "weighted_max_score": score["weighted_max_score"],
+
+        "weighted_breakdown": score["weighted_breakdown"],
         
         "score_percent": signal["score_percent"],
 

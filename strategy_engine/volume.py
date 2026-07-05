@@ -74,7 +74,7 @@ def volume_score(last, market="SET"):
     return {
         "engine": "volume",
         "score": min(score, 20),
-        "max_score": 25,
+        "max_score": 20,
         "quality": quality,
         "reasons": reasons,
     }

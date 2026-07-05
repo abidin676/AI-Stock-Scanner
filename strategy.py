@@ -130,6 +130,8 @@ def trend_start(
 
         "Base": decision["base"],
 
+        "Breakout": decision["breakout"],
+
         "Price": decision["price"],
 
         "Stage": decision["stage"],
