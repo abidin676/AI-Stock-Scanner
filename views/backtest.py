@@ -7,20 +7,16 @@ from backtest_engine import (
     EQUITY_FILE,
     SUMMARY_FILE,
     TRADES_FILE,
-    run_backtest,
+    run_strategy_lab,
 )
 
 
 SUMMARY_METRICS = [
     "Total Trades",
     "Win Rate",
-    "Avg Gain",
-    "Avg Loss",
     "Avg Return",
-    "Best Trade",
-    "Worst Trade",
+    "Avg Holding Days",
     "Profit Factor",
-    "Expectancy",
     "Max Drawdown",
 ]
 
@@ -32,7 +28,7 @@ def render_summary(summary):
         return
 
     row = summary.iloc[0]
-    cols = st.columns(5)
+    cols = st.columns(3)
 
     for index, metric in enumerate(SUMMARY_METRICS):
         value = row.get(
@@ -41,16 +37,11 @@ def render_summary(summary):
         )
         suffix = "%" if metric in (
             "Win Rate",
-            "Avg Gain",
-            "Avg Loss",
             "Avg Return",
-            "Best Trade",
-            "Worst Trade",
-            "Expectancy",
             "Max Drawdown",
         ) else ""
 
-        cols[index % 5].metric(
+        cols[index % 3].metric(
             metric,
             f"{value:,.2f}{suffix}",
         )
@@ -82,7 +73,12 @@ def render_equity_curve(equity_curve):
 
 def backtest_page():
 
-    st.title("Backtest")
+    st.title("Strategy Lab")
+    st.caption(
+        "Phase 1: Buy only when Scanner Decision Engine returns BUY and "
+        "Score >= Min Score. Hold while signal remains BUY. Exit when signal "
+        "changes to WATCH or SKIP."
+    )
     st.caption(
         f"Trades: {TRADES_FILE} | Summary: {SUMMARY_FILE} | Equity: {EQUITY_FILE}"
     )
@@ -90,7 +86,7 @@ def backtest_page():
     today = date.today()
     default_start = today - timedelta(days=365)
 
-    with st.form("backtest_form"):
+    with st.form("strategy_lab_form"):
         c1, c2, c3 = st.columns(3)
 
         with c1:
@@ -119,12 +115,6 @@ def backtest_page():
             )
 
         with c3:
-            holding_days = st.number_input(
-                "Holding Days",
-                min_value=1,
-                value=10,
-                step=1,
-            )
             min_score = st.number_input(
                 "Min Score",
                 min_value=0.0,
@@ -133,22 +123,8 @@ def backtest_page():
                 step=1.0,
             )
 
-        signal_filter = st.multiselect(
-            "Signal Filter",
-            [
-                "BUY",
-                "WATCH",
-                "EARLY",
-                "EXTENDED",
-                "SKIP",
-            ],
-            default=[
-                "BUY",
-            ],
-        )
-
         submitted = st.form_submit_button(
-            "Run Backtest"
+            "Run Strategy Lab"
         )
 
     if not submitted:
@@ -162,18 +138,16 @@ def backtest_page():
         st.error("Start Date must be before End Date")
         return
 
-    with st.spinner("Running backtest..."):
-        trades, summary, equity_curve = run_backtest(
+    with st.spinner("Running Strategy Lab..."):
+        trades, summary, equity_curve = run_strategy_lab(
             symbol=symbol,
             market=market,
             start_date=start_date,
             end_date=end_date,
-            holding_days=holding_days,
             min_score=min_score,
-            signal_filter=signal_filter,
         )
 
-    st.success("Backtest completed")
+    st.success("Strategy Lab completed")
 
     st.subheader("Summary Metrics")
     render_summary(summary)
@@ -181,7 +155,7 @@ def backtest_page():
     st.subheader("Trades")
 
     if trades.empty:
-        st.info("No trades matched the filters")
+        st.info("No trades matched BUY + Min Score")
     else:
         st.dataframe(
             trades,

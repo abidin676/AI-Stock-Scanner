@@ -18,11 +18,11 @@ page = st.sidebar.radio(
         "Scanner",
         "Watchlist",
         "Portfolio",
-        "Backtest",
+        "Strategy Lab",
     ],
 )
 
-if page == "Backtest":
+if page == "Strategy Lab":
     backtest_page()
 elif page == "Portfolio":
     portfolio_page()

@@ -1,4 +1,5 @@
 from contextlib import redirect_stdout
+from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 import io
@@ -24,11 +25,11 @@ TRADE_COLUMNS = [
     "EntryPrice",
     "ExitPrice",
     "HoldingDays",
-    "Signal",
+    "EntrySignal",
+    "ExitSignal",
     "Setup",
-    "Score",
-    "StopLoss",
-    "Target",
+    "EntryScore",
+    "ExitScore",
     "ExitReason",
     "GrossReturnPct",
     "NetReturnPct",
@@ -37,38 +38,82 @@ TRADE_COLUMNS = [
 SUMMARY_COLUMNS = [
     "Total Trades",
     "Win Rate",
-    "Avg Gain",
-    "Avg Loss",
     "Avg Return",
-    "Best Trade",
-    "Worst Trade",
+    "Avg Holding Days",
     "Profit Factor",
-    "Expectancy",
     "Max Drawdown",
 ]
 
 
-def signal_matches(signal, signal_filter):
+@dataclass
+class Position:
 
-    signal = str(signal).upper()
-    filters = signal_filter
+    entry_index: int
+    entry_date: pd.Timestamp
+    entry_price: float
+    entry_signal: str
+    setup: str
+    entry_score: float
 
-    if isinstance(filters, str):
-        filters = [filters]
 
-    filters = [
-        str(item).upper()
-        for item in filters
-        if str(item).strip()
+@dataclass
+class ExitDecision:
+
+    should_exit: bool
+    reason: str = ""
+
+
+class SignalChangeExitRule:
+
+    def __init__(self, exit_groups=None):
+
+        self.exit_groups = exit_groups or (
+            "WATCH",
+            "SKIP",
+        )
+
+    def evaluate(self, position, row, decision):
+
+        group = signal_group(
+            decision.get("signal", "")
+        )
+
+        if group in self.exit_groups:
+            return ExitDecision(
+                True,
+                f"Signal Changed: BUY -> {group}",
+            )
+
+        return ExitDecision(False)
+
+
+def default_exit_rules():
+
+    return [
+        SignalChangeExitRule(),
     ]
 
-    if not filters or "ALL" in filters:
-        return True
 
-    return any(
-        item in signal
-        for item in filters
-    )
+def signal_group(signal):
+
+    signal = str(signal).upper()
+
+    if "BUY" in signal:
+        return "BUY"
+
+    if "WATCH" in signal:
+        return "WATCH"
+
+    if "SKIP" in signal:
+        return "SKIP"
+
+    if "EARLY" in signal:
+        return "EARLY"
+
+    if "EXTENDED" in signal:
+        return "EXTENDED"
+
+    return "OTHER"
 
 
 def download_history(symbol, market, start_date, end_date):
@@ -128,50 +173,32 @@ def evaluate_day(history, market):
         )
 
 
-def calculate_stop_target(row, entry_price):
+def is_entry_signal(decision, min_score):
 
-    atr = float(row.get("atr", 0) or 0)
-
-    if atr <= 0:
-        return 0.0, 0.0
-
-    stop_loss = max(
-        0.0,
-        entry_price - atr,
-    )
-    target = entry_price + (atr * 2)
-
-    return round(stop_loss, 4), round(target, 4)
-
-
-def find_exit(df, entry_index, holding_days, stop_loss, target):
-
-    max_index = min(
-        entry_index + int(holding_days),
-        len(df) - 1,
-    )
-
-    for index in range(entry_index + 1, max_index + 1):
-        row = df.iloc[index]
-
-        if stop_loss > 0 and float(row["low"]) <= stop_loss:
-            return index, stop_loss, "STOP_LOSS"
-
-        if target > 0 and float(row["high"]) >= target:
-            return index, target, "TARGET"
-
-    exit_index = max_index
-    exit_reason = (
-        "HOLDING_DAYS"
-        if exit_index > entry_index
-        else "END_OF_DATA"
+    score = float(
+        decision.get("score", 0)
+        or 0
     )
 
     return (
-        exit_index,
-        float(df.iloc[exit_index]["close"]),
-        exit_reason,
+        signal_group(decision.get("signal", "")) == "BUY"
+        and score >= float(min_score)
     )
+
+
+def evaluate_exit(position, row, decision, exit_rules):
+
+    for rule in exit_rules:
+        result = rule.evaluate(
+            position,
+            row,
+            decision,
+        )
+
+        if result.should_exit:
+            return result
+
+    return ExitDecision(False)
 
 
 def calculate_trade_returns(entry_price, exit_price, market):
@@ -207,6 +234,35 @@ def calculate_trade_returns(entry_price, exit_price, market):
     )
 
     return round(gross_return_pct, 4), round(net_return_pct, 4)
+
+
+def close_position(symbol, market, position, row, decision, reason, index):
+
+    exit_price = float(row["close"])
+    gross_return_pct, net_return_pct = calculate_trade_returns(
+        position.entry_price,
+        exit_price,
+        market,
+    )
+
+    return {
+        "Symbol": str(symbol).upper().strip(),
+        "Market": market,
+        "EntryDate": position.entry_date.date().isoformat(),
+        "ExitDate": row["date"].date().isoformat(),
+        "EntryPrice": round(position.entry_price, 4),
+        "ExitPrice": round(exit_price, 4),
+        "HoldingDays": int(index - position.entry_index),
+        "EntrySignal": position.entry_signal,
+        "ExitSignal": decision.get("signal", ""),
+        "Setup": position.setup,
+        "EntryScore": round(position.entry_score, 2),
+        "ExitScore": round(float(decision.get("score", 0) or 0), 2),
+        "ExitReason": reason,
+        "GrossReturnPct": gross_return_pct,
+        "NetReturnPct": net_return_pct,
+        "WinLoss": "WIN" if net_return_pct > 0 else "LOSS",
+    }
 
 
 def build_equity_curve(trades):
@@ -285,13 +341,15 @@ def calculate_summary(trades, equity_curve=None):
         {
             "Total Trades": int(len(trades)),
             "Win Rate": round((returns > 0).mean() * 100, 2),
-            "Avg Gain": round(gains.mean(), 4) if not gains.empty else 0,
-            "Avg Loss": round(losses.mean(), 4) if not losses.empty else 0,
             "Avg Return": round(returns.mean(), 4),
-            "Best Trade": round(returns.max(), 4),
-            "Worst Trade": round(returns.min(), 4),
+            "Avg Holding Days": round(
+                pd.to_numeric(
+                    trades["HoldingDays"],
+                    errors="coerce",
+                ).fillna(0).mean(),
+                2,
+            ),
             "Profit Factor": round(profit_factor, 4),
-            "Expectancy": round(returns.mean(), 4),
             "Max Drawdown": round(float(max_drawdown), 4),
         }
     ])
@@ -316,22 +374,39 @@ def save_results(trades, summary, equity_curve):
     )
 
 
-def run_backtest(
+def prepare_history(symbol, market, start_date, end_date):
+
+    df = download_history(
+        symbol,
+        market,
+        start_date,
+        end_date,
+    )
+
+    if df.empty:
+        return df
+
+    df = add_indicators(df)
+    df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None)
+
+    return df
+
+
+def run_strategy_lab(
     symbol,
     market,
     start_date,
     end_date,
-    holding_days,
     min_score,
-    signal_filter,
+    exit_rules=None,
 ):
 
     market = str(market).upper().strip()
     start = pd.to_datetime(start_date)
     end = pd.to_datetime(end_date)
-    holding_days = int(holding_days)
     min_score = float(min_score)
-    df = download_history(
+    exit_rules = exit_rules or default_exit_rules()
+    df = prepare_history(
         symbol,
         market,
         start,
@@ -349,9 +424,8 @@ def run_backtest(
         )
         return trades, summary, equity_curve
 
-    df = add_indicators(df)
-    df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None)
     trades = []
+    position = None
 
     for index in range(len(df)):
         row = df.iloc[index]
@@ -360,59 +434,69 @@ def run_backtest(
             continue
 
         history = df.iloc[:index + 1].copy()
-        result = evaluate_day(
+        decision = evaluate_day(
             history,
             market,
         )
-        score = float(result.get("score", 0) or 0)
-        signal = result.get("signal", "")
 
-        if score < min_score:
+        if position is None:
+            if is_entry_signal(
+                decision,
+                min_score,
+            ):
+                position = Position(
+                    entry_index=index,
+                    entry_date=row["date"],
+                    entry_price=float(row["close"]),
+                    entry_signal=decision.get("signal", ""),
+                    setup=decision.get("setup", ""),
+                    entry_score=float(decision.get("score", 0) or 0),
+                )
             continue
 
-        if not signal_matches(
-            signal,
-            signal_filter,
-        ):
-            continue
-
-        entry_price = float(row["close"])
-        stop_loss, target = calculate_stop_target(
+        exit_decision = evaluate_exit(
+            position,
             row,
-            entry_price,
+            decision,
+            exit_rules,
         )
-        exit_index, exit_price, exit_reason = find_exit(
-            df,
-            index,
-            holding_days,
-            stop_loss,
-            target,
-        )
-        exit_row = df.iloc[exit_index]
-        gross_return_pct, net_return_pct = calculate_trade_returns(
-            entry_price,
-            exit_price,
+
+        if exit_decision.should_exit:
+            trades.append(
+                close_position(
+                    symbol,
+                    market,
+                    position,
+                    row,
+                    decision,
+                    exit_decision.reason,
+                    index,
+                )
+            )
+            position = None
+
+    if position is not None:
+        row = df[
+            (df["date"] >= start)
+            &
+            (df["date"] <= end)
+        ].iloc[-1]
+        history = df.loc[:row.name].copy()
+        decision = evaluate_day(
+            history,
             market,
         )
-
-        trades.append({
-            "Symbol": str(symbol).upper().strip(),
-            "Market": market,
-            "EntryDate": row["date"].date().isoformat(),
-            "ExitDate": exit_row["date"].date().isoformat(),
-            "EntryPrice": round(entry_price, 4),
-            "ExitPrice": round(float(exit_price), 4),
-            "HoldingDays": int(exit_index - index),
-            "Signal": signal,
-            "Setup": result.get("setup", ""),
-            "Score": round(score, 2),
-            "StopLoss": stop_loss,
-            "Target": target,
-            "ExitReason": exit_reason,
-            "GrossReturnPct": gross_return_pct,
-            "NetReturnPct": net_return_pct,
-            "WinLoss": "WIN" if net_return_pct > 0 else "LOSS",
-        })
+        trades.append(
+            close_position(
+                symbol,
+                market,
+                position,
+                row,
+                decision,
+                "End of Data",
+                int(row.name),
+            )
+        )
 
     trades_df = pd.DataFrame(
         trades,
@@ -430,3 +514,22 @@ def run_backtest(
     )
 
     return trades_df, summary, equity_curve
+
+
+def run_backtest(
+    symbol,
+    market,
+    start_date,
+    end_date,
+    holding_days=None,
+    min_score=70,
+    signal_filter=None,
+):
+
+    return run_strategy_lab(
+        symbol=symbol,
+        market=market,
+        start_date=start_date,
+        end_date=end_date,
+        min_score=min_score,
+    )
