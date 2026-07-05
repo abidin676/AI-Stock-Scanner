@@ -5,6 +5,8 @@ import html
 import pandas as pd
 import streamlit as st
 
+from watchlist import add_to_watchlist
+
 
 RESULT_FILE = Path("output") / "scanner_results.xlsx"
 SIGNAL_ORDER = {
@@ -94,6 +96,25 @@ def visible_columns(df):
         for column in DISPLAY_COLUMNS
         if column in df.columns
     ]
+
+
+def safe_number(value):
+
+    if pd.isna(value):
+        return 0
+
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def watchlist_label(row):
+
+    return (
+        f"{row['Symbol']} | {row['Market']} | "
+        f"{row['Signal']} | {row['Setup']} | Score {row['Score']}"
+    )
 
 
 def apply_filters(df, market_filter, signal_filter, symbol_search):
@@ -278,6 +299,61 @@ def render_top_market(df, market):
     render_table(top)
 
 
+def render_add_to_watchlist(df):
+
+    candidates = df[
+        df["_signal_group"] != "SKIP"
+    ].copy()
+
+    if candidates.empty:
+        return
+
+    st.subheader("Watchlist")
+
+    labels = [
+        watchlist_label(row)
+        for _, row in candidates.iterrows()
+    ]
+
+    with st.form("scanner_add_watchlist_form"):
+        selected = st.selectbox(
+            "Candidate",
+            labels,
+        )
+        note = st.text_input(
+            "Note",
+            value="",
+        )
+        submitted = st.form_submit_button(
+            "Add to Watchlist"
+        )
+
+    if not submitted:
+        return
+
+    symbol, market = [
+        part.strip()
+        for part in selected.split("|")[:2]
+    ]
+    row = candidates[
+        (candidates["Symbol"] == symbol)
+        &
+        (candidates["Market"] == market)
+    ].iloc[0]
+
+    add_to_watchlist(
+        row["Symbol"],
+        row["Market"],
+        price=safe_number(row.get("Price", 0)),
+        setup=row.get("Setup", ""),
+        score=safe_number(row.get("Score", 0)),
+        signal=row.get("Signal", ""),
+        note=note,
+    )
+
+    st.success(f"Added {row['Symbol']} to Watchlist")
+
+
 def scanner_page():
 
     st.title("River Alpha Scanner")
@@ -357,5 +433,7 @@ def scanner_page():
     if filtered.empty:
         st.info("No results")
         return
+
+    render_add_to_watchlist(filtered)
 
     render_table(filtered)

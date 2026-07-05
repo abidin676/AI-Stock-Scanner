@@ -2,6 +2,7 @@ import streamlit as st
 
 from views.portfolio import portfolio_page
 from views.scanner import scanner_page
+from views.watchlist import watchlist_page
 
 
 st.set_page_config(
@@ -14,11 +15,14 @@ page = st.sidebar.radio(
     "Page",
     [
         "Scanner",
+        "Watchlist",
         "Portfolio",
     ],
 )
 
 if page == "Portfolio":
     portfolio_page()
+elif page == "Watchlist":
+    watchlist_page()
 else:
     scanner_page()

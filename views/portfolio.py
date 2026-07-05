@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pandas as pd
 import streamlit as st
 
@@ -10,9 +8,9 @@ from portfolio import (
     close_position,
     load_portfolio,
 )
+from watchlist import load_watchlist, mark_bought
 
 
-SCANNER_FILE = Path("output") / "scanner_results.xlsx"
 OPEN_COLUMNS = [
     "Symbol",
     "Market",
@@ -71,14 +69,6 @@ def get_latest_price(symbol, market):
     )
 
 
-def load_scanner_candidates():
-
-    if not SCANNER_FILE.exists():
-        return pd.DataFrame()
-
-    return pd.read_excel(SCANNER_FILE)
-
-
 def available_columns(df, columns):
 
     return [
@@ -100,6 +90,26 @@ def sum_column(df, column):
         )
         .fillna(0)
         .sum()
+    )
+
+
+def load_watchlist_candidates():
+
+    watchlist = load_watchlist()
+
+    if watchlist.empty:
+        return watchlist
+
+    return watchlist[
+        watchlist["Status"] != "BOUGHT"
+    ].copy()
+
+
+def candidate_label(row):
+
+    return (
+        f"{row['Symbol']} | {row['Market']} | "
+        f"{row['Status']} | {row['Setup']} | Score {row['Score']}"
     )
 
 
@@ -161,27 +171,31 @@ def render_add_form():
 
     st.subheader("Add Position")
 
-    candidates = load_scanner_candidates()
+    candidates = load_watchlist_candidates()
     candidate_labels = ["Manual"]
 
     if not candidates.empty:
         for _, row in candidates.head(100).iterrows():
             candidate_labels.append(
-                f"{row['Symbol']} | {row['Market']} | "
-                f"{row['Setup']} | Score {row['Score']}"
+                candidate_label(row)
             )
 
     selected = st.selectbox(
-        "Scanner Candidate",
+        "Source",
         candidate_labels,
     )
 
     selected_row = None
 
     if selected != "Manual" and not candidates.empty:
-        selected_symbol = selected.split("|")[0].strip()
+        selected_symbol, selected_market = [
+            part.strip()
+            for part in selected.split("|")[:2]
+        ]
         selected_row = candidates[
-            candidates["Symbol"] == selected_symbol
+            (candidates["Symbol"] == selected_symbol)
+            &
+            (candidates["Market"] == selected_market)
         ].iloc[0]
 
     with st.form("add_position_form"):
@@ -256,6 +270,12 @@ def render_add_form():
             setup,
             score,
         )
+
+        if selected_row is not None:
+            mark_bought(
+                symbol,
+                market,
+            )
 
         st.success(f"Added {symbol.upper()} to portfolio")
         st.cache_data.clear()
