@@ -1,5 +1,6 @@
 from pathlib import Path
 from datetime import datetime
+import html
 
 import pandas as pd
 import streamlit as st
@@ -25,11 +26,11 @@ DISPLAY_COLUMNS = [
     "RVOL",
 ]
 ROW_COLORS = {
-    "BUY": "background-color: #dcfce7",
-    "WATCH": "background-color: #dbeafe",
-    "EARLY": "background-color: #fef9c3",
-    "EXTENDED": "background-color: #ffedd5",
-    "SKIP": "background-color: #f3f4f6",
+    "BUY": "#dcfce7",
+    "WATCH": "#dbeafe",
+    "EARLY": "#fef9c3",
+    "EXTENDED": "#ffedd5",
+    "SKIP": "#f3f4f6",
 }
 
 
@@ -120,30 +121,89 @@ def apply_filters(df, market_filter, signal_filter, symbol_search):
     return sort_results(data)
 
 
-def styled_table(df):
+def render_table(df):
 
-    display = df[visible_columns(df)].reset_index(
-        drop=True
+    columns = visible_columns(df)
+
+    header = "".join(
+        f"<th>{html.escape(column)}</th>"
+        for column in columns
     )
-    groups = df["_signal_group"].reset_index(
-        drop=True
-    )
 
-    def highlight_row(row):
+    rows = []
 
-        style = ROW_COLORS.get(
-            groups.iloc[row.name],
-            "",
+    for _, row in df.iterrows():
+
+        group = row.get("_signal_group", "OTHER")
+        background = ROW_COLORS.get(
+            group,
+            "#ffffff",
         )
 
-        return [
-            style
-            for _ in row
-        ]
+        cell_style = (
+            f"background-color: {background}; "
+            "color: #111827 !important; "
+            "font-weight: 700; "
+            "padding: 9px 12px; "
+            "border-top: 1px solid rgba(17, 24, 39, 0.12); "
+            "white-space: nowrap;"
+        )
 
-    return display.style.apply(
-        highlight_row,
-        axis=1,
+        cells = "".join(
+            f"<td style='{cell_style}'>{html.escape(str(row[column]))}</td>"
+            for column in columns
+        )
+
+        rows.append(
+            f"<tr style='background-color: {background}; color: #111827;'>"
+            f"{cells}</tr>"
+        )
+
+    st.markdown(
+        """
+        <style>
+        .ra-table-wrap {
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 6px;
+            max-height: 680px;
+            overflow: auto;
+        }
+        .ra-table {
+            border-collapse: collapse;
+            width: 100%;
+            min-width: 760px;
+            font-size: 14px;
+        }
+        .ra-table th {
+            background-color: #111827;
+            color: #f9fafb;
+            font-weight: 700;
+            padding: 10px 12px;
+            position: sticky;
+            top: 0;
+            text-align: left;
+            z-index: 1;
+        }
+        .ra-table td {
+            border-top: 1px solid rgba(17, 24, 39, 0.12);
+            color: #111827;
+            font-weight: 650;
+            padding: 9px 12px;
+            white-space: nowrap;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        "<div class='ra-table-wrap'>"
+        "<table class='ra-table'>"
+        f"<thead><tr>{header}</tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody>"
+        "</table>"
+        "</div>",
+        unsafe_allow_html=True,
     )
 
 
@@ -215,11 +275,7 @@ def render_top_market(df, market):
         st.info(f"No {market} results")
         return
 
-    st.dataframe(
-        styled_table(top),
-        use_container_width=True,
-        hide_index=True,
-    )
+    render_table(top)
 
 
 def scanner_page():
@@ -302,8 +358,4 @@ def scanner_page():
         st.info("No results")
         return
 
-    st.dataframe(
-        styled_table(filtered),
-        use_container_width=True,
-        hide_index=True,
-    )
+    render_table(filtered)
