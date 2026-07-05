@@ -20,9 +20,9 @@ MARKET_PROFILES = {
     "SET": {
 
         "thresholds": {
-            "BUY": 55,
-            "WATCH": 45,
-            "EARLY": 35,
+            "BUY": 70,
+            "WATCH": 60,
+            "EARLY": 50,
         },
 
         "filters": {
@@ -74,9 +74,9 @@ MARKET_PROFILES = {
     "USA": {
 
         "thresholds": {
-            "BUY": 75,
-            "WATCH": 65,
-            "EARLY": 55,
+            "BUY": 68,
+            "WATCH": 60,
+            "EARLY": 50,
         },
 
         "filters": {
