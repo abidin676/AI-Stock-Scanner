@@ -6,6 +6,7 @@ from data import get_history
 from indicators import add_indicators
 from strategy import trend_start
 from providers.usa import get_symbols as get_us_symbols
+from alert_engine import run_watchlist_alert_check
 from config import (
     SCAN_MARKETS,
     OUTPUT_FOLDER,
@@ -161,6 +162,33 @@ def save_results(df):
     print(excel_path)
 
 
+def run_watchlist_alerts(df):
+
+    try:
+        alerts = run_watchlist_alert_check(df)
+
+        if alerts.empty:
+            print("\nWatchlist Alerts : none")
+            return
+
+        print(f"\nWatchlist Alerts : {len(alerts)}")
+        print(
+            alerts[
+                [
+                    "Symbol",
+                    "Market",
+                    "AlertType",
+                    "Message",
+                ]
+            ].to_string(
+                index=False
+            )
+        )
+
+    except Exception as e:
+        print(f"\nWatchlist Alerts ERROR : {e}")
+
+
 def show_summary(df):
 
     if df.empty:
@@ -287,6 +315,8 @@ def main():
     )
 
     save_results(df)
+
+    run_watchlist_alerts(df)
 
     show_summary(df)
 

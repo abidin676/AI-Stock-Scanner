@@ -324,6 +324,18 @@ def render_add_to_watchlist(df):
             "Note",
             value="",
         )
+        stop_loss = st.number_input(
+            "Stop Loss",
+            min_value=0.0,
+            value=0.0,
+            step=0.01,
+        )
+        target = st.number_input(
+            "Target",
+            min_value=0.0,
+            value=0.0,
+            step=0.01,
+        )
         submitted = st.form_submit_button(
             "Add to Watchlist"
         )
@@ -348,6 +360,8 @@ def render_add_to_watchlist(df):
         setup=row.get("Setup", ""),
         score=safe_number(row.get("Score", 0)),
         signal=row.get("Signal", ""),
+        stop_loss=stop_loss,
+        target=target,
         note=note,
     )
 

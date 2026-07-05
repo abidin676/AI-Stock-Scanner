@@ -1,5 +1,10 @@
 import streamlit as st
 
+from alert_engine import (
+    ALERT_FILE,
+    load_alerts,
+    run_watchlist_alert_check,
+)
 from portfolio import add_position
 from watchlist import (
     WATCHLIST_FILE,
@@ -18,8 +23,22 @@ DISPLAY_COLUMNS = [
     "Setup",
     "Score",
     "Signal",
+    "StopLoss",
+    "Target",
     "Status",
     "Note",
+]
+ALERT_COLUMNS = [
+    "AlertTime",
+    "Symbol",
+    "Market",
+    "AlertType",
+    "Message",
+    "OldValue",
+    "NewValue",
+    "Score",
+    "Price",
+    "Setup",
 ]
 
 
@@ -100,6 +119,18 @@ def render_edit_form(watchlist):
             "Note",
             value=row["Note"],
         )
+        stop_loss = st.number_input(
+            "Stop Loss",
+            min_value=0.0,
+            value=float(row["StopLoss"]),
+            step=0.01,
+        )
+        target = st.number_input(
+            "Target",
+            min_value=0.0,
+            value=float(row["Target"]),
+            step=0.01,
+        )
         submitted = st.form_submit_button(
             "Save Watchlist"
         )
@@ -110,6 +141,8 @@ def render_edit_form(watchlist):
             row["Market"],
             note=note,
             status=status,
+            stop_loss=stop_loss,
+            target=target,
         )
         st.success(f"Updated {row['Symbol']}")
         st.rerun()
@@ -183,12 +216,62 @@ def render_buy_form(watchlist):
         st.rerun()
 
 
+def render_alerts():
+
+    st.subheader("Watchlist Alerts")
+    st.caption(f"Saved at: {ALERT_FILE}")
+
+    alerts = load_alerts()
+
+    if alerts.empty:
+        st.info("No watchlist alerts")
+        return
+
+    alerts = alerts.tail(50).iloc[::-1]
+
+    st.dataframe(
+        alerts[
+            available_columns(
+                alerts,
+                ALERT_COLUMNS,
+            )
+        ],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+def render_manual_alert_check():
+
+    scanner_file = "output/scanner_results.xlsx"
+
+    if st.button("Check Alerts From Latest Scan"):
+        try:
+            import pandas as pd
+
+            scanner_results = pd.read_excel(scanner_file)
+            alerts = run_watchlist_alert_check(scanner_results)
+
+            if alerts.empty:
+                st.info("No watchlist changes")
+            else:
+                st.success(f"Created {len(alerts)} alert(s)")
+
+            st.rerun()
+        except FileNotFoundError:
+            st.error("scanner_results.xlsx not found")
+
+
 def watchlist_page():
 
     st.title("Watchlist")
     st.caption(f"Saved at: {WATCHLIST_FILE}")
 
     watchlist = load_watchlist()
+
+    render_manual_alert_check()
+    render_alerts()
+    st.divider()
 
     if watchlist.empty:
         st.info("No watchlist items yet. Add candidates from Scanner.")

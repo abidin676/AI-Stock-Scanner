@@ -20,12 +20,16 @@ WATCHLIST_COLUMNS = [
     "Setup",
     "Score",
     "Signal",
+    "StopLoss",
+    "Target",
     "Status",
     "Note",
 ]
 NUMERIC_COLUMNS = [
     "Price",
     "Score",
+    "StopLoss",
+    "Target",
 ]
 
 
@@ -111,6 +115,8 @@ def add_to_watchlist(
     setup="",
     score=0,
     signal="",
+    stop_loss=0,
+    target=0,
     note="",
     status="WATCHING",
 ):
@@ -132,6 +138,8 @@ def add_to_watchlist(
         df.loc[index, "Setup"] = setup
         df.loc[index, "Score"] = float(score or 0)
         df.loc[index, "Signal"] = signal
+        df.loc[index, "StopLoss"] = float(stop_loss or 0)
+        df.loc[index, "Target"] = float(target or 0)
         if note:
             df.loc[index, "Note"] = note
         if df.loc[index, "Status"] == "":
@@ -145,6 +153,8 @@ def add_to_watchlist(
             "Setup": setup,
             "Score": float(score or 0),
             "Signal": signal,
+            "StopLoss": float(stop_loss or 0),
+            "Target": float(target or 0),
             "Status": status,
             "Note": note,
         }
@@ -161,7 +171,14 @@ def add_to_watchlist(
     return load_watchlist()
 
 
-def update_watchlist_item(symbol, market, note=None, status=None):
+def update_watchlist_item(
+    symbol,
+    market,
+    note=None,
+    status=None,
+    stop_loss=None,
+    target=None,
+):
 
     df = load_watchlist()
     symbol = str(symbol).upper().strip()
@@ -180,6 +197,12 @@ def update_watchlist_item(symbol, market, note=None, status=None):
 
     if status is not None:
         df.loc[mask, "Status"] = str(status).upper().strip()
+
+    if stop_loss is not None:
+        df.loc[mask, "StopLoss"] = float(stop_loss or 0)
+
+    if target is not None:
+        df.loc[mask, "Target"] = float(target or 0)
 
     save_watchlist(df)
 
