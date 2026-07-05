@@ -101,12 +101,12 @@ def visible_columns(df):
 def safe_number(value):
 
     if pd.isna(value):
-        return 0
+        return 0.0
 
     try:
         return float(value)
     except (TypeError, ValueError):
-        return 0
+        return 0.0
 
 
 def watchlist_label(row):
@@ -121,9 +121,9 @@ def first_existing_number(row, columns):
 
     for column in columns:
         if column in row:
-            return safe_number(row.get(column, 0))
+            return safe_number(row.get(column, 0.0))
 
-    return 0
+    return 0.0
 
 
 def selected_candidate_row(candidates, selected):
@@ -391,9 +391,9 @@ def render_add_to_watchlist(df):
     add_to_watchlist(
         row["Symbol"],
         row["Market"],
-        price=safe_number(row.get("Price", 0)),
+        price=safe_number(row.get("Price", 0.0)),
         setup=row.get("Setup", ""),
-        score=safe_number(row.get("Score", 0)),
+        score=safe_number(row.get("Score", 0.0)),
         signal=row.get("Signal", ""),
         stop_loss=stop_loss,
         target=target,
