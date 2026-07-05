@@ -82,11 +82,18 @@ def make_decision(
         last,
         df,
         ema_cross_func,
+        market=market,
     )
 
-    volume = volume_score(last)
+    volume = volume_score(
+        last,
+        market=market,
+    )
 
-    base = base_score(last)
+    base = base_score(
+        last,
+        market=market,
+    )
     price = price_score(last)
     breakout = breakout_score(last)
 
@@ -107,9 +114,6 @@ def make_decision(
     # -------------------------
 
     stage = calculate_score(df)
-
-    stage_score = stage["score"]
-    stage_reasons = stage["reasons"]
 
     # -------------------------
     # Total Score

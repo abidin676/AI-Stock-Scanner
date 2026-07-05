@@ -2,9 +2,12 @@ import pandas as pd
 
 
 
+MIN_STAGE_ROWS = 220
+
+
 def get_stage(df: pd.DataFrame):
 
-    if len(df) < 250:
+    if len(df) < MIN_STAGE_ROWS:
         return "UNKNOWN"
 
     last = df.iloc[-1]

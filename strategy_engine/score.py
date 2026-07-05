@@ -20,9 +20,13 @@ def calculate_score(df):
         score = -10
         reasons.append("Stage 3")
 
-    else:
+    elif stage == "STAGE_4":
         score = -30
         reasons.append("Stage 4")
+
+    else:
+        score = 0
+        reasons.append("Stage Unknown")
 
     # -------------------------
     # Quality

@@ -21,7 +21,10 @@ if df.empty:
 
 df = add_indicators(df)
 
-result = trend_start(df)
+result = trend_start(
+    df,
+    market="SET",
+)
 
 print("\n===== RESULT =====")
 print(result)

@@ -13,7 +13,10 @@ if df.empty:
 
 df = add_indicators(df)
 
-result = trend_start(df)
+result = trend_start(
+    df,
+    market=market,
+)
 
 print("=" * 50)
 print("Symbol :", symbol)

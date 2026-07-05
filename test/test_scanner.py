@@ -26,7 +26,10 @@ for symbol, market in symbols:
 
     df = add_indicators(df)
 
-    result = trend_start(df)
+    result = trend_start(
+        df,
+        market=market,
+    )
 
     print(f"Signal : {result['signal']}")
     print(f"Setup  : {result.get('setup', '-')}")

@@ -47,7 +47,10 @@ def scan_market(index="SET", market="SET"):
                 continue
 
             df = add_indicators(df)
-            result = trend_start(df)
+            result = trend_start(
+                df,
+                market=market,
+            )
 
             results.append({
                 "Symbol": symbol,
