@@ -1,4 +1,15 @@
-def mandatory_filters(last):
+"""
+River Alpha Mandatory Filters
+"""
+
+from strategy_engine.market_profiles import get_profile
+
+
+def mandatory_filters(last, market="USA"):
+
+    profile = get_profile(market)
+
+    f = profile["filters"]
 
     # ======================================
     # Price too far from EMA20
@@ -8,36 +19,42 @@ def mandatory_filters(last):
         last["close"] - last["ema20"]
     ) / last["ema20"]
 
-    if distance20 > 0.08:
+    if distance20 > f["max_distance_ema20"]:
 
         return {
             "passed": False,
             "signal": "EXTENDED",
-            "reason": "Price too far from EMA20"
+            "reasons": [
+                "Price too far from EMA20"
+            ],
         }
 
     # ======================================
     # RSI Overheated
     # ======================================
 
-    if last["rsi"] >= 75:
+    if last["rsi"] >= f["max_rsi"]:
 
         return {
             "passed": False,
             "signal": "EXTENDED",
-            "reason": "RSI Overbought"
+            "reasons": [
+                "RSI Overbought"
+            ],
         }
 
     # ======================================
     # Too Far From Base
     # ======================================
 
-    if last["move_from_low90"] > 80:
+    if last["move_from_low90"] > f["max_move_from_low90"]:
 
         return {
             "passed": False,
             "signal": "EXTENDED",
-            "reason": "Too Far From Base"
+            "reasons": [
+                "Too Far From Base"
+            ],
         }
 
     # ======================================
@@ -50,12 +67,19 @@ def mandatory_filters(last):
         and last["ema50"] < last["ema200"]
     ):
 
-        return {
-            "passed": False,
-            "signal": "SKIP",
-            "reason": "Major Downtrend"
-        }
+        # SET อนุโลม Stage 1 ได้
+        if not f["allow_stage1"]:
+
+            return {
+                "passed": False,
+                "signal": "SKIP",
+                "reasons": [
+                    "Major Downtrend"
+                ],
+            }
 
     return {
-        "passed": True
+        "passed": True,
+        "signal": "",
+        "reasons": [],
     }

@@ -170,4 +170,121 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
         &
         (df["ema20_slope"] > 0)
     )
+
+    # ==========================
+# Breakout 20 วัน
+# ==========================
+
+    df["high20"] = (
+        df["high"]
+        .rolling(20)
+        .max()
+        .shift(1)
+    )
+
+    df["break20"] = (
+        df["close"] > df["high20"]
+    )
+
+# ==========================
+# Breakout 55 วัน
+# ==========================
+
+    df["high55"] = (
+        df["high"]
+        .rolling(55)
+        .max()
+        .shift(1)
+    )
+
+    df["break55"] = (
+        df["close"] > df["high55"]
+    )
+
+# ==========================
+# Pivot High
+# ==========================
+
+    df["pivot20"] = (
+        df["high"]
+        .rolling(20)
+        .max()
+    )
+
+    df["near_pivot"] = (
+        (df["pivot20"] - df["close"])
+        / df["pivot20"]
+        < 0.03
+    )
+
+    # ==========================
+# Strong Close
+# ==========================
+
+    df["strong_close"] = (
+        df["close"]
+        >=
+        df["low"] + (df["high"] - df["low"]) * 0.75
+    )
+
+# ==========================
+# Close Above Previous High
+# ==========================
+
+    df["close_above_prev_high"] = (
+        df["close"] > df["high"].shift(1)
+    )
+
+# ==========================
+# Pocket Pivot
+# ==========================
+
+    df["pocket_pivot"] = (
+        (df["close"] > df["open"])
+        &
+        (df["volume"] > df["volume"].shift(1))
+        &
+        (df["close"] > df["ema20"])
+    )
     return df
+
+
+# ==========================
+# NR7
+# ==========================
+
+    range_ = df["high"] - df["low"]
+
+    df["nr7"] = (
+        range_
+        ==
+        range_.rolling(7).min()
+    )
+
+# ==========================
+# Inside Bar
+# ==========================
+
+    df["inside_bar"] = (
+        (df["high"] < df["high"].shift(1))
+        &
+        (df["low"] > df["low"].shift(1))
+    )
+
+# ==========================
+# Volume Breakout
+# ==========================
+
+    df["volume_breakout"] = (
+        df["rvol"] > 2
+    )
+
+# ==========================
+# Pivot Breakout
+# ==========================
+
+    df["pivot_breakout"] = (
+        df["near_pivot"]
+        &
+        df["break20"]
+    )

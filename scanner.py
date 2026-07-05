@@ -1,7 +1,6 @@
 import os
 import pandas as pd
 
-from strategy import trend_start
 from providers.thai import get_symbols
 from data import get_history
 from indicators import add_indicators
@@ -41,7 +40,6 @@ def scan_market(index="SET", market="SET"):
         print(f"[{i}/{len(symbols)}] {symbol}")
 
         try:
-
             df = get_history(symbol, market)
 
             if df.empty:
@@ -49,13 +47,13 @@ def scan_market(index="SET", market="SET"):
                 continue
 
             df = add_indicators(df)
-
             result = trend_start(df)
 
             results.append({
                 "Symbol": symbol,
                 "Market": market,
                 "Signal": result["signal"],
+                "Setup": result["setup"],
                 "Score": result["score"],
                 "Price": result["price"],
                 "RSI": result["rsi"],
@@ -69,7 +67,6 @@ def scan_market(index="SET", market="SET"):
             )
 
         except Exception as e:
-
             print(f"   ERROR : {e}")
 
     return pd.DataFrame(results)
@@ -144,19 +141,6 @@ def main():
         print("No Stocks")
 
         return
-
-    # ==========================
-    # Remove Duplicate Symbols
-    # ==========================
-
-    df = df.drop_duplicates(
-        subset="Symbol",
-        keep="first"
-    )
-
-    # ==========================
-    # Sort
-    # ==========================
 
     df = df.sort_values(
         by="Score",

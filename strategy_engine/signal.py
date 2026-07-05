@@ -1,24 +1,45 @@
-def build_signal(score):
+"""
+River Alpha Signal Engine
+"""
 
-    if score >= 90:
-        signal = "🚀 ELITE"
+from strategy_engine.market_profiles import get_profile
 
-    elif score >= 80:
+
+def build_signal(
+    total_score: int,
+    max_score: int,
+    market: str = "USA",
+):
+    """
+    Convert score into signal using market profile.
+    """
+
+    if max_score <= 0:
+        score_percent = 0
+    else:
+        score_percent = round(
+            total_score / max_score * 100
+        )
+
+    profile = get_profile(market)
+
+    t = profile["thresholds"]
+
+    if score_percent >= t["BUY"]:
         signal = "🟢 BUY"
 
-    elif score >= 70:
+    elif score_percent >= t["WATCH"]:
         signal = "👀 WATCH"
 
-    elif score >= 60:
+    elif score_percent >= t["EARLY"]:
         signal = "🌱 EARLY"
 
     else:
         signal = "SKIP"
 
-    passed = score >= 80
-
     return {
-        "engine": "stage",
-        "score": score,
-        "reasons": reasons,
+        "engine": "signal",
+        "signal": signal,
+        "passed": signal != "SKIP",
+        "score_percent": score_percent,
     }

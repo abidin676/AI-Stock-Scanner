@@ -1,34 +1,40 @@
-def momentum_score(last, df, ema_cross_func):
+from strategy_engine.market_profiles import MARKET_PROFILES
+
+def momentum_score(last, df, ema_cross_func, market="SET"):
+
+    profile = MARKET_PROFILES.get(
+        market,
+        MARKET_PROFILES["SET"],
+    )
+
+    cfg = profile["momentum"]
 
     score = 0
     reasons = []
 
     # ======================================
-    # Fresh EMA Cross (10)
+    # Fresh EMA Cross
     # ======================================
 
     if ema_cross_func(df, 3):
-        score += 10
-        reasons.append("Fresh EMA Cross")
+        score += cfg["fresh_cross"]
 
     elif ema_cross_func(df, 5):
-        score += 5
-        reasons.append("Recent EMA Cross")
+        score += cfg["recent_cross"]
 
     # ======================================
-    # EMA9 Momentum (5)
+    # EMA9 Momentum
     # ======================================
 
     if last["ema9"] > last["ema20"]:
-        score += 5
-        reasons.append("EMA9 Above EMA20")
+        score += cfg["ema9_above"]
 
     # ======================================
-    # MACD (5)
+    # MACD
     # ======================================
 
     if last["macd"] > last["macd_signal"]:
-        score += 3
+        score += cfg["macd_cross"]
         reasons.append("MACD Bullish")
 
     if last["macd_hist"] > 0:
@@ -36,16 +42,14 @@ def momentum_score(last, df, ema_cross_func):
         reasons.append("MACD Histogram Positive")
 
     # ======================================
-    # RSI (5)
+    # RSI
     # ======================================
 
     if 50 <= last["rsi"] <= 65:
-        score += 5
-        reasons.append("Healthy RSI")
+        score += cfg["rsi_strong"]
 
     elif 45 <= last["rsi"] < 50:
-        score += 2
-        reasons.append("RSI Recovering")
+        score += cfg["rsi_recover"]
 
     # ======================================
     # Quality
@@ -68,7 +72,7 @@ def momentum_score(last, df, ema_cross_func):
 
     return {
         "engine": "momentum",
-        "score": score,
+        "score": min(score, 25),
         "max_score": 25,
         "quality": quality,
         "reasons": reasons,

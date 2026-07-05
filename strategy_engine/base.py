@@ -1,60 +1,83 @@
-def base_score(last):
+from strategy_engine.market_profiles import MARKET_PROFILES
+
+def base_score(last, market="SET"):
+
+    profile = MARKET_PROFILES.get(
+        market,
+        MARKET_PROFILES["SET"],
+    )
 
     score = 0
     reasons = []
 
-    # ======================================
-    # EMA Compression (3)
-    # ======================================
+    # ===============================
+    # EMA Compression
+    # ===============================
 
     if last["ema_compression"]:
         score += 3
         reasons.append("EMA Compression")
 
-    # ======================================
-    # ATR Compression (3)
-    # ======================================
+    # ===============================
+    # ATR Compression
+    # ===============================
 
     if last["atr_compression"]:
         score += 3
         reasons.append("ATR Compression")
 
-    # ======================================
-    # Dry Volume (2)
-    # ======================================
+    # ===============================
+    # Dry Volume
+    # ===============================
 
     if last["dry_volume"]:
         score += 2
         reasons.append("Volume Dry Up")
 
-    # ======================================
-    # Distance From Base (6)
-    # ======================================
+    # ===============================
+    # Distance From Base
+    # ===============================
 
     move = last["move_from_low90"]
 
-    if move <= 20:
-        score += 4
-        reasons.append("Near Base")
+    if market == "SET":
 
-    elif move <= 40:
-        score += 2
-        reasons.append("Still Near Base")
+        if move <= 40:
+            score += 6
+            reasons.append("Near Base")
 
-    # ======================================
-    # Tight Base (1)
-    # ======================================
+        elif move <= 60:
+            score += 4
+            reasons.append("Still Near Base")
+
+        elif move <= 80:
+            score += 2
+            reasons.append("Acceptable Extension")
+
+    else:
+
+        if move <= 20:
+            score += 6
+            reasons.append("Near Base")
+
+        elif move <= 40:
+            score += 3
+            reasons.append("Still Near Base")
+
+    # ===============================
+    # Tight Base
+    # ===============================
 
     if (
         last["ema_compression"]
         and last["atr_compression"]
     ):
-        score += 1
+        score += 2
         reasons.append("Tight Base")
 
-    # ======================================
+    # ===============================
     # Quality
-    # ======================================
+    # ===============================
 
     if score >= 13:
         quality = "EXCELLENT"

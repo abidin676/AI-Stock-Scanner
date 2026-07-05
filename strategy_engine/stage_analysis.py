@@ -1,15 +1,18 @@
 import pandas as pd
 
 
+
 def get_stage(df: pd.DataFrame):
 
     if len(df) < 250:
         return "UNKNOWN"
 
-    price = df["close"].iloc[-1]
+    last = df.iloc[-1]
 
-    ema50 = df["ema50"].iloc[-1]
-    ema200 = df["ema200"].iloc[-1]
+    price = last["close"]
+
+    ema50 = last["ema50"]
+    ema200 = last["ema200"]
 
     ema50_prev = df["ema50"].iloc[-20]
     ema200_prev = df["ema200"].iloc[-20]
@@ -17,25 +20,39 @@ def get_stage(df: pd.DataFrame):
     ema50_up = ema50 > ema50_prev
     ema200_up = ema200 > ema200_prev
 
+    # -------------------------
     # Stage 2
+    # -------------------------
+
     if (
-        price > ema50 > ema200
+        price > ema50
+        and ema50 > ema200
         and ema50_up
-        and ema200_up
     ):
         return "STAGE_2"
 
+    # -------------------------
     # Stage 4
+    # -------------------------
+
     if (
-        price < ema50 < ema200
+        price < ema50
+        and ema50 < ema200
+        and not ema200_up
     ):
         return "STAGE_4"
 
+    # -------------------------
     # Stage 1
+    # -------------------------
+
     if (
-        price < ema200
-        and ema50_up
+        abs(price - ema200) / ema200 < 0.10
     ):
         return "STAGE_1"
+
+    # -------------------------
+    # Stage 3
+    # -------------------------
 
     return "STAGE_3"

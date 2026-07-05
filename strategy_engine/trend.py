@@ -1,71 +1,46 @@
-def trend_score(last):
+from strategy_engine.market_profiles import get_profile
+
+def trend_score(last, market="SET"):
+
+    profile = get_profile(market)
+
+    w = profile["trend"]
 
     score = 0
     reasons = []
 
-    # ======================================
-    # EMA Alignment (12)
-    # ======================================
-
     if last["ema20"] > last["ema50"]:
-        score += 6
+        score += w["ema20_ema50"]
         reasons.append("EMA20 > EMA50")
 
     if last["ema50"] > last["ema200"]:
-        score += 6
+        score += w["ema50_ema200"]
         reasons.append("EMA50 > EMA200")
 
-    # ======================================
-    # EMA Slope (10)
-    # ======================================
-
     if last["ema20_slope"] > 0:
-        score += 5
+        score += w["ema20_slope"]
         reasons.append("EMA20 Turning Up")
 
     if last["ema50_slope"] > 0:
-        score += 5
+        score += w["ema50_slope"]
         reasons.append("EMA50 Turning Up")
 
-    # ======================================
-    # Structure (8)
-    # ======================================
-
     if last["higher_low"]:
-        score += 3
+        score += w["higher_low"]
         reasons.append("Higher Low")
 
     if last["higher_high"]:
-        score += 2
+        score += w["higher_high"]
         reasons.append("Higher High")
 
     if last["trend_change"]:
-        score += 3
+        score += w["trend_change"]
         reasons.append("Trend Change")
-
-    # ======================================
-    # Quality
-    # ======================================
-
-    if score >= 27:
-        quality = "EXCELLENT"
-
-    elif score >= 22:
-        quality = "STRONG"
-
-    elif score >= 16:
-        quality = "GOOD"
-
-    elif score >= 10:
-        quality = "NORMAL"
-
-    else:
-        quality = "WEAK"
 
     return {
         "engine": "trend",
         "score": score,
-        "max_score": 30,
-        "quality": quality,
+        "max_score": sum(w.values()),
+        "quality": "",
         "reasons": reasons,
     }

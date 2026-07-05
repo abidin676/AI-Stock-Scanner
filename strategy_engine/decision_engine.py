@@ -18,24 +18,28 @@ Responsibilities
 The Decision Engine only aggregates results.
 """
 
+
 from strategy_engine.momentum import momentum_score
 from strategy_engine.volume import volume_score
 from strategy_engine.base import base_score
 from strategy_engine.quality_gate import quality_gate
 from strategy_engine.score import calculate_score
 from strategy_engine.signal import build_signal
+from strategy_engine.price import price_score
+from strategy_engine.trend import trend_score
+from strategy_engine.breakout import breakout_score
 
 from datetime import datetime
 from collections.abc import Callable
 import pandas as pd
 
 def make_decision(
-    df: pd.DataFrame,
-    price_score: int,
-    ema_cross_func: Callable,
-    symbol: str = "",
-    market: str = "",
-) -> dict:
+    df,
+    ema_cross_func,
+    symbol="",
+    market="",
+):
+    
     """
     Build one unified decision object.
 
@@ -70,8 +74,10 @@ def make_decision(
     # Strategy Engines
     # -------------------------
 
-    trend = trend_score(last)
-
+    trend = trend_score(
+        last,
+        market=market,
+    )
     momentum = momentum_score(
         last,
         df,
@@ -81,6 +87,8 @@ def make_decision(
     volume = volume_score(last)
 
     base = base_score(last)
+    price = price_score(last)
+    breakout = breakout_score(last)
 
     # -------------------------
     # Quality Gate
@@ -91,7 +99,7 @@ def make_decision(
         momentum,
         volume,
         base,
-        price_score,
+        price["score"],
     )
 
     # -------------------------
@@ -112,27 +120,91 @@ def make_decision(
         + momentum["score"]
         + volume["score"]
         + base["score"]
-        + stage_score
+        + breakout["score"]
+        + price["score"]
+        + stage["score"]
     )
     max_score = (
         trend["max_score"]
         + momentum["max_score"]
         + volume["max_score"]
         + base["max_score"]
+        + breakout["max_score"]
+        + price["max_score"]
         + stage["max_score"]
     )
+# -------------------------
+# DEBUG
+# -------------------------
 
-    # -------------------------
-    # Signal
-    # -------------------------
+    score_percent = round(
+        total_score / max_score * 100
+    )
+
+    print(
+        f"[DEBUG] {symbol} | "
+        f"Market={market} | "
+        f"Score={total_score}/{max_score} "
+        f"({score_percent}%)"
+    )
+# -------------------------
+# Signal
+# -------------------------
+
+    score_percent = round(
+        total_score / max_score * 100
+)
 
     if gate["passed"]:
-        signal = build_signal(total_score)
+
+        print(
+            f"[DEBUG] {symbol}"
+        )
+        print(
+            f"Market   : {market}"
+        )
+        print(
+            f"Score    : {total_score}/{max_score}"
+        )
+        print(
+            f"Percent  : {score_percent}%"
+        )
+
+        signal = build_signal(
+            total_score,
+            max_score,
+            market,
+        )
+
+        print(
+            f"Signal   : {signal['signal']}"
+        )
+        print("-" * 40)
+
     else:
+
+        print(
+            f"[DEBUG] {symbol}"
+        )
+        print(
+            f"Market   : {market}"
+        )
+        print(
+            f"Score    : {total_score}/{max_score}"
+        )
+        print(
+            f"Percent  : {score_percent}%"
+        )
+        print(
+            f"Gate     : FAILED"
+        )
+        print("-" * 40)
+
         signal = {
             "engine": "signal",
             "signal": "SKIP",
             "passed": False,
+            "score_percent": score_percent,
         }
 
     # -------------------------
@@ -146,8 +218,10 @@ def make_decision(
         momentum,
         volume,
         base,
+        price,
         gate,
         stage,
+        breakout
     ):
         reasons.extend(engine.get("reasons", []))
 
@@ -160,6 +234,8 @@ def make_decision(
         "total_score": total_score,
         
         "max_score": max_score,
+        
+        "score_percent": signal["score_percent"],
 
         "signal": signal["signal"],
 
@@ -173,13 +249,15 @@ def make_decision(
 
         "base": base,
 
+        "breakout": breakout,
+
         "quality_gate": gate,
 
         "stage": stage,
 
         "reasons": reasons,
 
-        "max_score": max_score,
+        "price": price,
 
         "metadata": {
             "symbol": symbol,
