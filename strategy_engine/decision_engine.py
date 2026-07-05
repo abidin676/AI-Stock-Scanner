@@ -175,9 +175,8 @@ def make_decision(
         )
 
         signal = build_signal(
-            score["weighted_total_score"],
-            score["weighted_max_score"],
-            market,
+            score["score_percent"],
+            market=market,
         )
 
         print(

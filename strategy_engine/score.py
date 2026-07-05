@@ -131,12 +131,17 @@ def calculate_weighted_score(engine_results, weights):
     else:
         raw_score_percent = 0
 
+    bounded_weighted_score = max(
+        0,
+        min(weighted_total_score, 100)
+    )
+
     return {
         "raw_total_score": round(raw_total_score, 2),
         "raw_max_score": round(raw_max_score, 2),
         "raw_score_percent": raw_score_percent,
-        "weighted_total_score": round(weighted_total_score, 2),
+        "weighted_total_score": round(bounded_weighted_score, 2),
         "weighted_max_score": 100,
-        "score_percent": round(weighted_total_score),
+        "score_percent": round(bounded_weighted_score),
         "weighted_breakdown": weighted_breakdown,
     }

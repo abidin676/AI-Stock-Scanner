@@ -6,20 +6,21 @@ from strategy_engine.market_profiles import get_profile
 
 
 def build_signal(
-    total_score: int,
-    max_score: int,
+    score_percent: int,
+    max_score=None,
     market: str = "USA",
 ):
     """
-    Convert score into signal using market profile.
+    Convert weighted score percent into signal using market profile.
     """
 
-    if max_score <= 0:
+    if isinstance(max_score, str):
+        market = max_score
+
+    if score_percent is None:
         score_percent = 0
-    else:
-        score_percent = round(
-            total_score / max_score * 100
-        )
+
+    score_percent = round(float(score_percent))
 
     profile = get_profile(market)
 
