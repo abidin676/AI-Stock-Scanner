@@ -21,6 +21,8 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def scan_market(index="SET", market="SET"):
 
+    market = (market or "SET").upper()
+
     if market.upper() == "SET":
         symbols = get_symbols(index)
 

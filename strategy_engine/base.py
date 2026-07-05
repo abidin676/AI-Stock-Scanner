@@ -1,11 +1,6 @@
-from strategy_engine.market_profiles import MARKET_PROFILES
-
 def base_score(last, market="SET"):
 
-    profile = MARKET_PROFILES.get(
-        market,
-        MARKET_PROFILES["SET"],
-    )
+    market = (market or "SET").upper()
 
     score = 0
     reasons = []

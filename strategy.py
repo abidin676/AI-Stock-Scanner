@@ -39,6 +39,8 @@ def trend_start(
     market="SET",
 ):
 
+    market = (market or "SET").upper()
+
     # --------------------------------------
     # Not enough data
     # --------------------------------------

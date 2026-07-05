@@ -1,12 +1,9 @@
-from strategy_engine.market_profiles import MARKET_PROFILES
+from strategy_engine.market_profiles import get_profile
 
 
 def volume_score(last, market="SET"):
 
-    profile = MARKET_PROFILES.get(
-        market,
-        MARKET_PROFILES["SET"],
-    )
+    profile = get_profile(market)
 
     score = 0
     reasons = []

@@ -1,11 +1,8 @@
-from strategy_engine.market_profiles import MARKET_PROFILES
+from strategy_engine.market_profiles import get_profile
 
 def momentum_score(last, df, ema_cross_func, market="SET"):
 
-    profile = MARKET_PROFILES.get(
-        market,
-        MARKET_PROFILES["SET"],
-    )
+    profile = get_profile(market)
 
     cfg = profile["momentum"]
 

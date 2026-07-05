@@ -68,6 +68,8 @@ def make_decision(
     if df.empty:
         raise ValueError("DataFrame is empty.")
 
+    market = (market or "SET").upper()
+
     last = df.iloc[-1]
 
 
