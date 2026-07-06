@@ -5,10 +5,21 @@ import streamlit as st
 
 from backtest_engine import (
     EQUITY_FILE,
+    INITIAL_CAPITAL,
     MONTHLY_FILE,
     SUMMARY_FILE,
     TRADES_FILE,
     run_strategy_lab,
+)
+from strategy_history import (
+    BENCHMARK_FILE,
+    DEFAULT_VERSION,
+    HISTORY_FILE,
+    compare_benchmark,
+    compare_runs,
+    load_benchmark,
+    load_strategy_history,
+    save_strategy_run,
 )
 
 
@@ -62,6 +73,33 @@ TRADE_ANALYSIS_COLUMNS = [
     "NetReturnPct",
     "WinLoss",
 ]
+BENCHMARK_OPTIONS = [
+    "None",
+    "Buy & Hold",
+    "SET Index",
+    "SET50",
+    "SET100",
+    "NASDAQ100",
+    "S&P500",
+]
+HISTORY_DISPLAY_COLUMNS = [
+    "RunID",
+    "Date",
+    "Symbol",
+    "Version",
+    "Return",
+    "Profit Factor",
+    "Win Rate",
+    "Drawdown",
+    "Trades",
+]
+COMPARISON_PERCENT_METRICS = {
+    "Total Return",
+    "Annual Return",
+    "Max Drawdown",
+    "Win Rate",
+    "Average Return",
+}
 
 
 def available_columns(df, columns):
@@ -71,6 +109,469 @@ def available_columns(df, columns):
         for column in columns
         if column in df.columns
     ]
+
+
+def format_metric_value(metric, value):
+
+    value = float(
+        value
+        if pd.notna(value)
+        else 0
+    )
+    suffix = "%" if metric in COMPARISON_PERCENT_METRICS else ""
+
+    return f"{value:,.2f}{suffix}"
+
+
+def render_benchmark_cards(comparison):
+
+    if comparison.empty:
+        st.info("No benchmark comparison")
+        return
+
+    for _, row in comparison.iterrows():
+        metric = row["Metric"]
+        c1, c2, c3 = st.columns(3)
+
+        c1.metric(
+            f"River Alpha {metric}",
+            format_metric_value(
+                metric,
+                row["River Alpha"],
+            ),
+        )
+        c2.metric(
+            f"Benchmark {metric}",
+            format_metric_value(
+                metric,
+                row["Benchmark"],
+            ),
+        )
+        c3.metric(
+            f"Difference {metric}",
+            format_metric_value(
+                metric,
+                row["Difference"],
+            ),
+        )
+
+
+def render_equity_comparison(
+    equity_curve,
+    benchmark_curve,
+    start_date,
+    initial_capital=INITIAL_CAPITAL,
+):
+
+    if benchmark_curve.empty:
+        st.info("No benchmark equity curve")
+        return
+
+    rows = [
+        {
+            "Date": pd.to_datetime(start_date),
+            "Equity": float(initial_capital),
+            "Series": "River Alpha",
+        }
+    ]
+
+    if not equity_curve.empty:
+        strategy = equity_curve.copy()
+        strategy["Date"] = pd.to_datetime(
+            strategy["ExitDate"],
+            errors="coerce",
+        )
+        strategy["Equity"] = pd.to_numeric(
+            strategy["Equity"],
+            errors="coerce",
+        )
+        strategy = strategy.dropna(
+            subset=[
+                "Date",
+                "Equity",
+            ]
+        )
+
+        rows.extend(
+            [
+                {
+                    "Date": row["Date"],
+                    "Equity": row["Equity"],
+                    "Series": "River Alpha",
+                }
+                for _, row in strategy.iterrows()
+            ]
+        )
+
+    benchmark = benchmark_curve.copy()
+    benchmark["Date"] = pd.to_datetime(
+        benchmark["Date"],
+        errors="coerce",
+    )
+    benchmark["Equity"] = pd.to_numeric(
+        benchmark["BenchmarkEquity"],
+        errors="coerce",
+    )
+    benchmark_name = benchmark["Benchmark"].iloc[0]
+    benchmark = benchmark.dropna(
+        subset=[
+            "Date",
+            "Equity",
+        ]
+    )
+
+    rows.extend(
+        [
+            {
+                "Date": row["Date"],
+                "Equity": row["Equity"],
+                "Series": benchmark_name,
+            }
+            for _, row in benchmark.iterrows()
+        ]
+    )
+
+    chart = pd.DataFrame(rows)
+
+    st.subheader("Equity Comparison")
+
+    if PLOTLY_AVAILABLE:
+        fig = px.line(
+            chart,
+            x="Date",
+            y="Equity",
+            color="Series",
+            title="River Alpha Equity vs Benchmark Equity",
+        )
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+        )
+        return
+
+    pivot = chart.pivot_table(
+        index="Date",
+        columns="Series",
+        values="Equity",
+        aggfunc="last",
+    ).sort_index()
+    st.line_chart(
+        pivot,
+        use_container_width=True,
+    )
+
+
+def render_benchmark_section(
+    benchmark_name,
+    benchmark_curve,
+    benchmark_comparison,
+    equity_curve,
+    start_date,
+):
+
+    if not benchmark_name or benchmark_name == "None":
+        return
+
+    st.header("Benchmark")
+    st.caption(f"Benchmark output: {BENCHMARK_FILE}")
+
+    if benchmark_curve.empty:
+        st.warning("No benchmark data found for the selected period.")
+        return
+
+    render_benchmark_cards(benchmark_comparison)
+    render_equity_comparison(
+        equity_curve,
+        benchmark_curve,
+        start_date,
+    )
+
+
+def strategy_history_display(history):
+
+    display = history.copy()
+    display["RunID"] = pd.to_numeric(
+        display["RunID"],
+        errors="coerce",
+    ).fillna(0).astype(int)
+    display["Date"] = pd.to_datetime(
+        display["RunTimestamp"],
+        errors="coerce",
+    ).dt.strftime("%Y-%m-%d %H:%M")
+    display["Return"] = pd.to_numeric(
+        display["TotalReturnPct"],
+        errors="coerce",
+    ).fillna(0)
+    display["Profit Factor"] = pd.to_numeric(
+        display["ProfitFactor"],
+        errors="coerce",
+    ).fillna(0)
+    display["Win Rate"] = pd.to_numeric(
+        display["WinRate"],
+        errors="coerce",
+    ).fillna(0)
+    display["Drawdown"] = pd.to_numeric(
+        display["MaxDrawdown"],
+        errors="coerce",
+    ).fillna(0)
+    display["Trades"] = pd.to_numeric(
+        display["TotalTrades"],
+        errors="coerce",
+    ).fillna(0).astype(int)
+
+    return display[
+        available_columns(
+            display,
+            HISTORY_DISPLAY_COLUMNS,
+        )
+    ]
+
+
+def render_history_filters(history):
+
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+        markets = [
+            "ALL",
+        ] + sorted(
+            history["Market"].dropna().astype(str).unique()
+        )
+        market_filter = st.selectbox(
+            "Market",
+            markets,
+            key="strategy_history_market",
+        )
+
+    with c2:
+        symbols = [
+            "ALL",
+        ] + sorted(
+            history["Symbol"].dropna().astype(str).unique()
+        )
+        symbol_filter = st.selectbox(
+            "Symbol",
+            symbols,
+            key="strategy_history_symbol",
+        )
+
+    with c3:
+        versions = [
+            "ALL",
+        ] + sorted(
+            history["Version"].dropna().astype(str).unique()
+        )
+        version_filter = st.selectbox(
+            "Version",
+            versions,
+            key="strategy_history_version",
+        )
+
+    filtered = history.copy()
+
+    if market_filter != "ALL":
+        filtered = filtered[
+            filtered["Market"].astype(str) == market_filter
+        ]
+
+    if symbol_filter != "ALL":
+        filtered = filtered[
+            filtered["Symbol"].astype(str) == symbol_filter
+        ]
+
+    if version_filter != "ALL":
+        filtered = filtered[
+            filtered["Version"].astype(str) == version_filter
+        ]
+
+    return filtered
+
+
+def run_label(row):
+
+    run_id = int(
+        float(
+            row.get(
+                "RunID",
+                0,
+            )
+            or 0
+        )
+    )
+    symbol = row.get(
+        "Symbol",
+        "",
+    )
+    total_return = pd.to_numeric(
+        row.get(
+            "TotalReturnPct",
+            0,
+        ),
+        errors="coerce",
+    )
+    timestamp = row.get(
+        "RunTimestamp",
+        "",
+    )
+
+    return f"#{run_id} {symbol} {total_return:.2f}% {timestamp}"
+
+
+def render_run_comparison(history):
+
+    st.subheader("Compare Runs")
+
+    if len(history) < 2:
+        st.info("Need at least two Strategy Lab runs to compare.")
+        return
+
+    ordered = history.copy()
+    ordered["RunID"] = pd.to_numeric(
+        ordered["RunID"],
+        errors="coerce",
+    )
+    ordered = ordered.dropna(
+        subset=[
+            "RunID",
+        ]
+    ).sort_values(
+        "RunID",
+        ascending=False,
+    )
+
+    if len(ordered) < 2:
+        st.info("Need at least two Strategy Lab runs to compare.")
+        return
+
+    run_ids = ordered["RunID"].astype(int).tolist()
+    labels = {
+        int(row["RunID"]): run_label(row)
+        for _, row in ordered.iterrows()
+    }
+    c1, c2 = st.columns(2)
+
+    with c1:
+        run_a = st.selectbox(
+            "Run A",
+            run_ids,
+            format_func=lambda run_id: labels.get(
+                int(run_id),
+                str(run_id),
+            ),
+            key="strategy_compare_run_a",
+        )
+
+    with c2:
+        run_b = st.selectbox(
+            "Run B",
+            run_ids,
+            index=1,
+            format_func=lambda run_id: labels.get(
+                int(run_id),
+                str(run_id),
+            ),
+            key="strategy_compare_run_b",
+        )
+
+    if int(run_a) == int(run_b):
+        st.info("Select two different runs.")
+        return
+
+    comparison = compare_runs(
+        run_a,
+        run_b,
+    )
+
+    if comparison.empty:
+        st.info("No comparison data")
+        return
+
+    run_a_column = f"Run {int(run_a)}"
+    run_b_column = f"Run {int(run_b)}"
+    display = comparison[
+        [
+            "Metric",
+            "RunA",
+            "RunB",
+        ]
+    ].rename(
+        columns={
+            "RunA": run_a_column,
+            "RunB": run_b_column,
+        }
+    )
+
+    def highlight_better(_):
+
+        styles = pd.DataFrame(
+            "",
+            index=display.index,
+            columns=display.columns,
+        )
+
+        for index, row in comparison.iterrows():
+            if row["Better"] == "A":
+                styles.loc[index, run_a_column] = (
+                    "background-color: #b7f7c6; color: #0f172a;"
+                )
+            elif row["Better"] == "B":
+                styles.loc[index, run_b_column] = (
+                    "background-color: #b7f7c6; color: #0f172a;"
+                )
+
+        return styles
+
+    styled = display.style.apply(
+        highlight_better,
+        axis=None,
+    ).format(
+        {
+            run_a_column: "{:,.2f}",
+            run_b_column: "{:,.2f}",
+        }
+    )
+    st.dataframe(
+        styled,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+def render_strategy_history_dashboard():
+
+    st.header("Strategy History")
+    st.caption(f"History file: {HISTORY_FILE}")
+
+    history = load_strategy_history()
+
+    if history.empty:
+        st.info("No Strategy Lab history yet.")
+        return
+
+    filtered = render_history_filters(history)
+    filtered = filtered.copy()
+    filtered["RunID"] = pd.to_numeric(
+        filtered["RunID"],
+        errors="coerce",
+    )
+    filtered = filtered.dropna(
+        subset=[
+            "RunID",
+        ]
+    ).sort_values(
+        "RunID",
+        ascending=False,
+    )
+
+    latest = filtered.head(50)
+
+    st.subheader("Latest 50 Runs")
+    st.dataframe(
+        strategy_history_display(latest),
+        use_container_width=True,
+        hide_index=True,
+    )
+    render_run_comparison(filtered)
 
 
 def render_summary_cards(summary):
@@ -358,12 +859,13 @@ def backtest_page():
 
     st.title("Strategy Lab")
     st.caption(
-        "Phase 2.1: Performance Dashboard uses Strategy Lab trades, equity, "
-        "and monthly performance without changing the trading logic."
+        "Phase 2.2: Strategy History and Benchmark comparison build on "
+        "Strategy Lab outputs without changing the trading logic."
     )
     st.caption(
         f"Trades: {TRADES_FILE} | Summary: {SUMMARY_FILE} | "
-        f"Equity: {EQUITY_FILE} | Monthly: {MONTHLY_FILE}"
+        f"Equity: {EQUITY_FILE} | Monthly: {MONTHLY_FILE} | "
+        f"History: {HISTORY_FILE} | Benchmark: {BENCHMARK_FILE}"
     )
 
     today = date.today()
@@ -462,42 +964,90 @@ def backtest_page():
                 step=0.5,
             )
 
+        benchmark_name = st.selectbox(
+            "Benchmark",
+            BENCHMARK_OPTIONS,
+            key="strategy_lab_benchmark",
+        )
+        st.caption(f"Version: {DEFAULT_VERSION}")
+
         submitted = st.form_submit_button(
             "Run Strategy Lab"
         )
 
-    if not submitted:
-        return
+    if submitted:
+        if not symbol.strip():
+            st.error("Symbol is required")
+        elif start_date >= end_date:
+            st.error("Start Date must be before End Date")
+        else:
+            with st.spinner("Running Strategy Lab..."):
+                trades, summary, equity_curve, monthly = run_strategy_lab(
+                    symbol=symbol,
+                    market=market,
+                    start_date=start_date,
+                    end_date=end_date,
+                    min_score=min_score,
+                    enable_stop_loss=enable_stop_loss,
+                    stop_loss_pct=stop_loss_pct,
+                    enable_target=enable_target,
+                    target_pct=target_pct,
+                    enable_max_holding_days=enable_max_holding_days,
+                    max_holding_days=max_holding_days,
+                    enable_trailing_stop=enable_trailing_stop,
+                    trailing_stop_pct=trailing_stop_pct,
+                )
+                run_row = save_strategy_run(
+                    market=market,
+                    symbol=symbol,
+                    start_date=start_date,
+                    end_date=end_date,
+                    min_score=min_score,
+                    summary=summary,
+                    trades=trades,
+                    stop_loss_enabled=enable_stop_loss,
+                    stop_loss_pct=stop_loss_pct,
+                    target_enabled=enable_target,
+                    target_pct=target_pct,
+                    trailing_enabled=enable_trailing_stop,
+                    trailing_pct=trailing_stop_pct,
+                    max_holding_enabled=enable_max_holding_days,
+                    max_holding_days=max_holding_days,
+                    initial_capital=INITIAL_CAPITAL,
+                    version=DEFAULT_VERSION,
+                )
+                benchmark_curve = load_benchmark(
+                    benchmark=benchmark_name,
+                    symbol=symbol,
+                    market=market,
+                    start_date=start_date,
+                    end_date=end_date,
+                    initial_capital=INITIAL_CAPITAL,
+                )
+                benchmark_comparison = compare_benchmark(
+                    summary=summary,
+                    benchmark_curve=benchmark_curve,
+                    start_date=start_date,
+                    end_date=end_date,
+                    initial_capital=INITIAL_CAPITAL,
+                )
 
-    if not symbol.strip():
-        st.error("Symbol is required")
-        return
+            st.success(
+                f"Strategy Lab completed. Saved RunID {run_row['RunID']}."
+            )
+            render_performance_dashboard(
+                trades,
+                summary,
+                equity_curve,
+                monthly,
+            )
+            render_benchmark_section(
+                benchmark_name,
+                benchmark_curve,
+                benchmark_comparison,
+                equity_curve,
+                start_date,
+            )
 
-    if start_date >= end_date:
-        st.error("Start Date must be before End Date")
-        return
-
-    with st.spinner("Running Strategy Lab..."):
-        trades, summary, equity_curve, monthly = run_strategy_lab(
-            symbol=symbol,
-            market=market,
-            start_date=start_date,
-            end_date=end_date,
-            min_score=min_score,
-            enable_stop_loss=enable_stop_loss,
-            stop_loss_pct=stop_loss_pct,
-            enable_target=enable_target,
-            target_pct=target_pct,
-            enable_max_holding_days=enable_max_holding_days,
-            max_holding_days=max_holding_days,
-            enable_trailing_stop=enable_trailing_stop,
-            trailing_stop_pct=trailing_stop_pct,
-        )
-
-    st.success("Strategy Lab completed")
-    render_performance_dashboard(
-        trades,
-        summary,
-        equity_curve,
-        monthly,
-    )
+    st.divider()
+    render_strategy_history_dashboard()
