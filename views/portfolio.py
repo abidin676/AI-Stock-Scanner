@@ -2,6 +2,7 @@ import pandas as pd
 import streamlit as st
 
 from data import get_history
+from fx_engine import get_fx_rate
 from portfolio import (
     PORTFOLIO_FILE,
     add_position,
@@ -71,6 +72,15 @@ def get_latest_price(symbol, market):
     )
 
 
+@st.cache_data(ttl=3600)
+def get_thb_rate(currency):
+
+    return get_fx_rate(
+        currency,
+        "THB",
+    )
+
+
 def available_columns(df, columns):
 
     return [
@@ -122,6 +132,134 @@ def portfolio_currencies(*dataframes):
     return sorted(currencies)
 
 
+def calculate_currency_metrics(
+    portfolio,
+    open_positions,
+    closed_positions,
+    currency,
+):
+
+    currency_portfolio = filter_currency(
+        portfolio,
+        currency,
+    )
+    currency_open = filter_currency(
+        open_positions,
+        currency,
+    )
+    currency_closed = filter_currency(
+        closed_positions,
+        currency,
+    )
+    total_fees = (
+        sum_column(currency_portfolio, "BuyFee")
+        + sum_column(currency_closed, "SellFee")
+    )
+    net_cost = sum_column(
+        currency_open,
+        "NetCost",
+    )
+    current_value = sum_column(
+        currency_open,
+        "CurrentValue",
+    )
+    unrealized_net_pl = sum_column(
+        currency_open,
+        "UnrealizedNetPL",
+    )
+    unrealized_net_pl_pct = (
+        unrealized_net_pl
+        / net_cost
+        * 100
+        if net_cost
+        else 0
+    )
+    realized_net_pl = sum_column(
+        currency_closed,
+        "NetPL",
+    )
+
+    return {
+        "total_fees": total_fees,
+        "net_cost": net_cost,
+        "current_value": current_value,
+        "unrealized_net_pl": unrealized_net_pl,
+        "unrealized_net_pl_pct": unrealized_net_pl_pct,
+        "realized_net_pl": realized_net_pl,
+    }
+
+
+def render_total_thb_summary(
+    portfolio,
+    open_positions,
+    closed_positions,
+    currencies,
+):
+
+    totals = {
+        "total_fees": 0,
+        "net_cost": 0,
+        "current_value": 0,
+        "unrealized_net_pl": 0,
+        "realized_net_pl": 0,
+    }
+    fx_notes = []
+    missing_rates = []
+
+    for currency in currencies:
+        metrics = calculate_currency_metrics(
+            portfolio,
+            open_positions,
+            closed_positions,
+            currency,
+        )
+
+        try:
+            rate = get_thb_rate(currency)
+        except Exception as e:
+            missing_rates.append(
+                f"{currency}: {e}"
+            )
+            continue
+
+        if currency != "THB":
+            fx_notes.append(
+                f"{currency}/THB {rate:,.4f}"
+            )
+
+        for key in totals:
+            totals[key] += metrics[key] * rate
+
+    unrealized_net_pl_pct = (
+        totals["unrealized_net_pl"]
+        / totals["net_cost"]
+        * 100
+        if totals["net_cost"]
+        else 0
+    )
+
+    st.markdown("**Total Portfolio (THB)**")
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric("Total Fees", f"{totals['total_fees']:,.2f} THB")
+    c2.metric("Net Cost", f"{totals['net_cost']:,.2f} THB")
+    c3.metric("Current Value", f"{totals['current_value']:,.2f} THB")
+    c4.metric("Unrealized Net P/L", f"{totals['unrealized_net_pl']:,.2f} THB")
+    c5.metric("Unrealized Net P/L %", f"{unrealized_net_pl_pct:.2f}%")
+    c6.metric("Realized Net P/L", f"{totals['realized_net_pl']:,.2f} THB")
+
+    if fx_notes:
+        st.caption(
+            "FX: "
+            + ", ".join(fx_notes)
+        )
+
+    if missing_rates:
+        st.warning(
+            "Cannot convert some currencies to THB: "
+            + "; ".join(missing_rates)
+        )
+
+
 def render_currency_summary(portfolio, open_positions, closed_positions):
 
     currencies = portfolio_currencies(
@@ -135,56 +273,39 @@ def render_currency_summary(portfolio, open_positions, closed_positions):
         return
 
     st.subheader("Portfolio Summary")
+    render_total_thb_summary(
+        portfolio,
+        open_positions,
+        closed_positions,
+        currencies,
+    )
 
+    st.markdown("**Currency Breakdown**")
     for currency in currencies:
-        currency_portfolio = filter_currency(
+        metrics = calculate_currency_metrics(
             portfolio,
-            currency,
-        )
-        currency_open = filter_currency(
             open_positions,
-            currency,
-        )
-        currency_closed = filter_currency(
             closed_positions,
             currency,
-        )
-        total_fees = (
-            sum_column(currency_portfolio, "BuyFee")
-            + sum_column(currency_closed, "SellFee")
-        )
-        net_cost = sum_column(
-            currency_open,
-            "NetCost",
-        )
-        current_value = sum_column(
-            currency_open,
-            "CurrentValue",
-        )
-        unrealized_net_pl = sum_column(
-            currency_open,
-            "UnrealizedNetPL",
-        )
-        unrealized_net_pl_pct = (
-            unrealized_net_pl
-            / net_cost
-            * 100
-            if net_cost
-            else 0
-        )
-        realized_net_pl = sum_column(
-            currency_closed,
-            "NetPL",
         )
 
         st.markdown(f"**{currency} Portfolio**")
         c1, c2, c3, c4, c5, c6 = st.columns(6)
-        c1.metric("Total Fees", f"{total_fees:,.2f} {currency}")
-        c2.metric("Net Cost", f"{net_cost:,.2f} {currency}")
-        c3.metric("Current Value", f"{current_value:,.2f} {currency}")
-        c4.metric("Unrealized Net P/L", f"{unrealized_net_pl:,.2f} {currency}")
-        c5.metric("Unrealized Net P/L %", f"{unrealized_net_pl_pct:.2f}%")
-        c6.metric("Realized Net P/L", f"{realized_net_pl:,.2f} {currency}")
+        c1.metric("Total Fees", f"{metrics['total_fees']:,.2f} {currency}")
+        c2.metric("Net Cost", f"{metrics['net_cost']:,.2f} {currency}")
+        c3.metric("Current Value", f"{metrics['current_value']:,.2f} {currency}")
+        c4.metric(
+            "Unrealized Net P/L",
+            f"{metrics['unrealized_net_pl']:,.2f} {currency}",
+        )
+        c5.metric(
+            "Unrealized Net P/L %",
+            f"{metrics['unrealized_net_pl_pct']:.2f}%",
+        )
+        c6.metric(
+            "Realized Net P/L",
+            f"{metrics['realized_net_pl']:,.2f} {currency}",
+        )
 
 
 def load_watchlist_candidates():
