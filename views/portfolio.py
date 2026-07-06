@@ -14,6 +14,7 @@ from watchlist import load_watchlist, mark_bought
 OPEN_COLUMNS = [
     "Symbol",
     "Market",
+    "Currency",
     "EntryDate",
     "EntryPrice",
     "Shares",
@@ -31,6 +32,7 @@ OPEN_COLUMNS = [
 CLOSED_COLUMNS = [
     "Symbol",
     "Market",
+    "Currency",
     "EntryDate",
     "EntryPrice",
     "Shares",
@@ -91,6 +93,98 @@ def sum_column(df, column):
         .fillna(0)
         .sum()
     )
+
+
+def filter_currency(df, currency):
+
+    if df.empty or "Currency" not in df:
+        return df.iloc[0:0].copy()
+
+    return df[
+        df["Currency"] == currency
+    ].copy()
+
+
+def portfolio_currencies(*dataframes):
+
+    currencies = set()
+
+    for df in dataframes:
+        if df.empty or "Currency" not in df:
+            continue
+
+        currencies.update(
+            currency
+            for currency in df["Currency"].dropna().unique()
+            if str(currency).strip()
+        )
+
+    return sorted(currencies)
+
+
+def render_currency_summary(portfolio, open_positions, closed_positions):
+
+    currencies = portfolio_currencies(
+        portfolio,
+        open_positions,
+        closed_positions,
+    )
+
+    if not currencies:
+        st.info("No portfolio currency data")
+        return
+
+    st.subheader("Portfolio Summary")
+
+    for currency in currencies:
+        currency_portfolio = filter_currency(
+            portfolio,
+            currency,
+        )
+        currency_open = filter_currency(
+            open_positions,
+            currency,
+        )
+        currency_closed = filter_currency(
+            closed_positions,
+            currency,
+        )
+        total_fees = (
+            sum_column(currency_portfolio, "BuyFee")
+            + sum_column(currency_closed, "SellFee")
+        )
+        net_cost = sum_column(
+            currency_open,
+            "NetCost",
+        )
+        current_value = sum_column(
+            currency_open,
+            "CurrentValue",
+        )
+        unrealized_net_pl = sum_column(
+            currency_open,
+            "UnrealizedNetPL",
+        )
+        unrealized_net_pl_pct = (
+            unrealized_net_pl
+            / net_cost
+            * 100
+            if net_cost
+            else 0
+        )
+        realized_net_pl = sum_column(
+            currency_closed,
+            "NetPL",
+        )
+
+        st.markdown(f"**{currency} Portfolio**")
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
+        c1.metric("Total Fees", f"{total_fees:,.2f} {currency}")
+        c2.metric("Net Cost", f"{net_cost:,.2f} {currency}")
+        c3.metric("Current Value", f"{current_value:,.2f} {currency}")
+        c4.metric("Unrealized Net P/L", f"{unrealized_net_pl:,.2f} {currency}")
+        c5.metric("Unrealized Net P/L %", f"{unrealized_net_pl_pct:.2f}%")
+        c6.metric("Realized Net P/L", f"{realized_net_pl:,.2f} {currency}")
 
 
 def load_watchlist_candidates():
@@ -344,41 +438,11 @@ def portfolio_page():
         open_positions
     )
 
-    total_fees = (
-        sum_column(portfolio, "BuyFee")
-        + sum_column(closed_positions, "SellFee")
-    )
-    net_cost = sum_column(
+    render_currency_summary(
+        portfolio,
         enriched_open,
-        "NetCost",
-    )
-    current_value = sum_column(
-        enriched_open,
-        "CurrentValue",
-    )
-    unrealized_net_pl = sum_column(
-        enriched_open,
-        "UnrealizedNetPL",
-    )
-    unrealized_net_pl_pct = (
-        unrealized_net_pl
-        / net_cost
-        * 100
-        if net_cost
-        else 0
-    )
-    realized_net_pl = sum_column(
         closed_positions,
-        "NetPL",
     )
-
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
-    c1.metric("Total Fees", f"{total_fees:,.2f}")
-    c2.metric("Net Cost", f"{net_cost:,.2f}")
-    c3.metric("Current Value", f"{current_value:,.2f}")
-    c4.metric("Unrealized Net P/L", f"{unrealized_net_pl:,.2f}")
-    c5.metric("Unrealized Net P/L %", f"{unrealized_net_pl_pct:.2f}%")
-    c6.metric("Realized Net P/L", f"{realized_net_pl:,.2f}")
 
     st.divider()
 

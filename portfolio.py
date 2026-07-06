@@ -7,10 +7,15 @@ from fee_engine import calculate_fee
 
 
 PORTFOLIO_FILE = Path("data") / "portfolio.csv"
+CURRENCY_BY_MARKET = {
+    "SET": "THB",
+    "USA": "USD",
+}
 
 BASE_COLUMNS = [
     "Symbol",
     "Market",
+    "Currency",
     "EntryDate",
     "EntryPrice",
     "Shares",
@@ -61,6 +66,16 @@ def _zero_fee():
         "vat": 0.0,
         "total_fee": 0.0,
     }
+
+
+def currency_for_market(market):
+
+    market = str(market).upper().strip()
+
+    return CURRENCY_BY_MARKET.get(
+        market,
+        "UNKNOWN",
+    )
 
 
 def _safe_float(value, default=0.0):
@@ -125,6 +140,7 @@ def _normalize_portfolio(df):
 
     df["Symbol"] = df["Symbol"].fillna("").astype(str).str.upper().str.strip()
     df["Market"] = df["Market"].fillna("").astype(str).str.upper().str.strip()
+    df["Currency"] = df["Market"].apply(currency_for_market)
     df["Setup"] = df["Setup"].fillna("")
     df["EntryDate"] = df["EntryDate"].fillna("")
     df["ExitDate"] = df["ExitDate"].fillna("")
@@ -266,6 +282,7 @@ def add_position(
     new_row = {
         "Symbol": str(symbol).upper().strip(),
         "Market": market,
+        "Currency": currency_for_market(market),
         "EntryDate": date.today().isoformat(),
         "EntryPrice": entry_price,
         "Shares": shares,
