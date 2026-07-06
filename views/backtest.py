@@ -75,9 +75,9 @@ def backtest_page():
 
     st.title("Strategy Lab")
     st.caption(
-        "Phase 1: Buy only when Scanner Decision Engine returns BUY and "
+        "Phase 2: Buy only when Scanner Decision Engine returns BUY and "
         "Score >= Min Score. Hold while signal remains BUY. Exit when signal "
-        "changes to WATCH or SKIP."
+        "changes to WATCH or SKIP, or when an enabled optional exit rule fires."
     )
     st.caption(
         f"Trades: {TRADES_FILE} | Summary: {SUMMARY_FILE} | Equity: {EQUITY_FILE}"
@@ -123,6 +123,62 @@ def backtest_page():
                 step=1.0,
             )
 
+        st.subheader("Exit Rules")
+        st.caption(
+            "Signal Changed is always active. Optional rules below run before "
+            "Signal Changed and the matched rule is recorded as ExitReason."
+        )
+
+        r1, r2, r3, r4 = st.columns(4)
+
+        with r1:
+            enable_stop_loss = st.checkbox(
+                "Stop Loss",
+                value=False,
+            )
+            stop_loss_pct = st.number_input(
+                "Stop Loss %",
+                min_value=0.1,
+                value=8.0,
+                step=0.5,
+            )
+
+        with r2:
+            enable_target = st.checkbox(
+                "Target",
+                value=False,
+            )
+            target_pct = st.number_input(
+                "Target %",
+                min_value=0.1,
+                value=20.0,
+                step=0.5,
+            )
+
+        with r3:
+            enable_max_holding_days = st.checkbox(
+                "Max Holding Days",
+                value=False,
+            )
+            max_holding_days = st.number_input(
+                "Max Days",
+                min_value=1,
+                value=20,
+                step=1,
+            )
+
+        with r4:
+            enable_trailing_stop = st.checkbox(
+                "Trailing Stop",
+                value=False,
+            )
+            trailing_stop_pct = st.number_input(
+                "Trailing Stop %",
+                min_value=0.1,
+                value=10.0,
+                step=0.5,
+            )
+
         submitted = st.form_submit_button(
             "Run Strategy Lab"
         )
@@ -145,6 +201,14 @@ def backtest_page():
             start_date=start_date,
             end_date=end_date,
             min_score=min_score,
+            enable_stop_loss=enable_stop_loss,
+            stop_loss_pct=stop_loss_pct,
+            enable_target=enable_target,
+            target_pct=target_pct,
+            enable_max_holding_days=enable_max_holding_days,
+            max_holding_days=max_holding_days,
+            enable_trailing_stop=enable_trailing_stop,
+            trailing_stop_pct=trailing_stop_pct,
         )
 
     st.success("Strategy Lab completed")

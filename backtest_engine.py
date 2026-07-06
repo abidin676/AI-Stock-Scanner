@@ -54,6 +54,7 @@ class Position:
     entry_signal: str
     setup: str
     entry_score: float
+    highest_price: float
 
 
 @dataclass
@@ -61,6 +62,7 @@ class ExitDecision:
 
     should_exit: bool
     reason: str = ""
+    exit_price: float | None = None
 
 
 class SignalChangeExitRule:
@@ -72,7 +74,7 @@ class SignalChangeExitRule:
             "SKIP",
         )
 
-    def evaluate(self, position, row, decision):
+    def evaluate(self, position, row, decision, index):
 
         group = signal_group(
             decision.get("signal", "")
@@ -85,6 +87,135 @@ class SignalChangeExitRule:
             )
 
         return ExitDecision(False)
+
+
+class StopLossExitRule:
+
+    def __init__(self, stop_loss_pct):
+
+        self.stop_loss_pct = float(stop_loss_pct)
+
+    def evaluate(self, position, row, decision, index):
+
+        stop_price = position.entry_price * (
+            1 - self.stop_loss_pct / 100
+        )
+
+        if float(row["low"]) <= stop_price:
+            return ExitDecision(
+                True,
+                f"Stop Loss {self.stop_loss_pct:.2f}%",
+                round(stop_price, 4),
+            )
+
+        return ExitDecision(False)
+
+
+class TargetExitRule:
+
+    def __init__(self, target_pct):
+
+        self.target_pct = float(target_pct)
+
+    def evaluate(self, position, row, decision, index):
+
+        target_price = position.entry_price * (
+            1 + self.target_pct / 100
+        )
+
+        if float(row["high"]) >= target_price:
+            return ExitDecision(
+                True,
+                f"Target {self.target_pct:.2f}%",
+                round(target_price, 4),
+            )
+
+        return ExitDecision(False)
+
+
+class MaxHoldingDaysExitRule:
+
+    def __init__(self, max_holding_days):
+
+        self.max_holding_days = int(max_holding_days)
+
+    def evaluate(self, position, row, decision, index):
+
+        holding_days = int(index - position.entry_index)
+
+        if holding_days >= self.max_holding_days:
+            return ExitDecision(
+                True,
+                f"Max Holding Days {self.max_holding_days}",
+            )
+
+        return ExitDecision(False)
+
+
+class TrailingStopExitRule:
+
+    def __init__(self, trailing_stop_pct):
+
+        self.trailing_stop_pct = float(trailing_stop_pct)
+
+    def evaluate(self, position, row, decision, index):
+
+        position.highest_price = max(
+            position.highest_price,
+            float(row["high"]),
+        )
+        stop_price = position.highest_price * (
+            1 - self.trailing_stop_pct / 100
+        )
+
+        if float(row["low"]) <= stop_price:
+            return ExitDecision(
+                True,
+                f"Trailing Stop {self.trailing_stop_pct:.2f}%",
+                round(stop_price, 4),
+            )
+
+        return ExitDecision(False)
+
+
+def build_exit_rules(
+    enable_stop_loss=False,
+    stop_loss_pct=0,
+    enable_target=False,
+    target_pct=0,
+    enable_max_holding_days=False,
+    max_holding_days=0,
+    enable_trailing_stop=False,
+    trailing_stop_pct=0,
+):
+
+    rules = []
+
+    if enable_stop_loss and float(stop_loss_pct) > 0:
+        rules.append(
+            StopLossExitRule(stop_loss_pct)
+        )
+
+    if enable_target and float(target_pct) > 0:
+        rules.append(
+            TargetExitRule(target_pct)
+        )
+
+    if enable_trailing_stop and float(trailing_stop_pct) > 0:
+        rules.append(
+            TrailingStopExitRule(trailing_stop_pct)
+        )
+
+    if enable_max_holding_days and int(max_holding_days) > 0:
+        rules.append(
+            MaxHoldingDaysExitRule(max_holding_days)
+        )
+
+    rules.append(
+        SignalChangeExitRule()
+    )
+
+    return rules
 
 
 def default_exit_rules():
@@ -186,13 +317,14 @@ def is_entry_signal(decision, min_score):
     )
 
 
-def evaluate_exit(position, row, decision, exit_rules):
+def evaluate_exit(position, row, decision, exit_rules, index):
 
     for rule in exit_rules:
         result = rule.evaluate(
             position,
             row,
             decision,
+            index,
         )
 
         if result.should_exit:
@@ -236,9 +368,22 @@ def calculate_trade_returns(entry_price, exit_price, market):
     return round(gross_return_pct, 4), round(net_return_pct, 4)
 
 
-def close_position(symbol, market, position, row, decision, reason, index):
+def close_position(
+    symbol,
+    market,
+    position,
+    row,
+    decision,
+    reason,
+    index,
+    exit_price=None,
+):
 
-    exit_price = float(row["close"])
+    exit_price = (
+        float(row["close"])
+        if exit_price is None
+        else float(exit_price)
+    )
     gross_return_pct, net_return_pct = calculate_trade_returns(
         position.entry_price,
         exit_price,
@@ -399,13 +544,30 @@ def run_strategy_lab(
     end_date,
     min_score,
     exit_rules=None,
+    enable_stop_loss=False,
+    stop_loss_pct=0,
+    enable_target=False,
+    target_pct=0,
+    enable_max_holding_days=False,
+    max_holding_days=0,
+    enable_trailing_stop=False,
+    trailing_stop_pct=0,
 ):
 
     market = str(market).upper().strip()
     start = pd.to_datetime(start_date)
     end = pd.to_datetime(end_date)
     min_score = float(min_score)
-    exit_rules = exit_rules or default_exit_rules()
+    exit_rules = exit_rules or build_exit_rules(
+        enable_stop_loss=enable_stop_loss,
+        stop_loss_pct=stop_loss_pct,
+        enable_target=enable_target,
+        target_pct=target_pct,
+        enable_max_holding_days=enable_max_holding_days,
+        max_holding_days=max_holding_days,
+        enable_trailing_stop=enable_trailing_stop,
+        trailing_stop_pct=trailing_stop_pct,
+    )
     df = prepare_history(
         symbol,
         market,
@@ -451,6 +613,7 @@ def run_strategy_lab(
                     entry_signal=decision.get("signal", ""),
                     setup=decision.get("setup", ""),
                     entry_score=float(decision.get("score", 0) or 0),
+                    highest_price=float(row["close"]),
                 )
             continue
 
@@ -459,6 +622,7 @@ def run_strategy_lab(
             row,
             decision,
             exit_rules,
+            index,
         )
 
         if exit_decision.should_exit:
@@ -471,6 +635,7 @@ def run_strategy_lab(
                     decision,
                     exit_decision.reason,
                     index,
+                    exit_decision.exit_price,
                 )
             )
             position = None
