@@ -5,82 +5,365 @@ import streamlit as st
 
 from backtest_engine import (
     EQUITY_FILE,
+    MONTHLY_FILE,
     SUMMARY_FILE,
     TRADES_FILE,
     run_strategy_lab,
 )
 
 
+try:
+    import plotly.express as px
+
+    PLOTLY_AVAILABLE = True
+except Exception:
+    px = None
+    PLOTLY_AVAILABLE = False
+
+
 SUMMARY_METRICS = [
+    "Initial Capital",
+    "Final Equity",
+    "Total Return %",
+    "Max Drawdown %",
     "Total Trades",
     "Win Rate",
-    "Avg Return",
-    "Avg Holding Days",
     "Profit Factor",
-    "Max Drawdown",
+    "Avg Win",
+    "Avg Loss",
+    "Best Trade",
+    "Worst Trade",
+    "Avg Holding Days",
+]
+PERCENT_METRICS = {
+    "Total Return %",
+    "Max Drawdown %",
+    "Win Rate",
+    "Avg Win",
+    "Avg Loss",
+    "Best Trade",
+    "Worst Trade",
+}
+MONTHLY_COLUMNS = [
+    "Year",
+    "Month",
+    "MonthlyReturnPct",
+]
+TRADE_ANALYSIS_COLUMNS = [
+    "Symbol",
+    "EntryDate",
+    "ExitDate",
+    "EntryPrice",
+    "ExitPrice",
+    "HoldingDays",
+    "EntryScore",
+    "ExitScore",
+    "ExitReason",
+    "NetReturnPct",
+    "WinLoss",
 ]
 
 
-def render_summary(summary):
+def available_columns(df, columns):
+
+    return [
+        column
+        for column in columns
+        if column in df.columns
+    ]
+
+
+def render_summary_cards(summary):
 
     if summary.empty:
         st.info("No summary")
         return
 
     row = summary.iloc[0]
-    cols = st.columns(3)
+    columns = st.columns(4)
 
     for index, metric in enumerate(SUMMARY_METRICS):
         value = row.get(
             metric,
             0,
         )
-        suffix = "%" if metric in (
-            "Win Rate",
-            "Avg Return",
-            "Max Drawdown",
-        ) else ""
-
-        cols[index % 3].metric(
+        suffix = "%" if metric in PERCENT_METRICS else ""
+        columns[index % 4].metric(
             metric,
-            f"{value:,.2f}{suffix}",
+            f"{float(value):,.2f}{suffix}",
         )
 
 
-def render_equity_curve(equity_curve):
+def render_line_chart(df, x, y, title):
 
-    st.subheader("Equity Curve")
+    st.subheader(title)
 
-    if equity_curve.empty:
-        st.info("No equity curve")
+    if df.empty:
+        st.info(f"No {title.lower()}")
         return
 
-    chart = equity_curve.copy()
-    chart["ExitDate"] = pd.to_datetime(chart["ExitDate"])
-    chart = chart.set_index("ExitDate")
+    chart = df.copy()
+    chart[x] = pd.to_datetime(
+        chart[x],
+        errors="coerce",
+    )
+    chart = chart.dropna(
+        subset=[
+            x,
+        ]
+    )
+
+    if chart.empty:
+        st.info(f"No {title.lower()}")
+        return
+
+    if PLOTLY_AVAILABLE:
+        fig = px.line(
+            chart,
+            x=x,
+            y=y,
+            markers=True,
+            title=title,
+        )
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+        )
+        return
 
     st.line_chart(
-        chart["Equity"],
+        chart.set_index(x)[y],
         use_container_width=True,
     )
 
+
+def render_monthly_chart(monthly):
+
+    st.subheader("Monthly Returns")
+
+    if monthly.empty:
+        st.info("No monthly returns")
+        return
+
+    chart = monthly.copy()
+    chart["Period"] = (
+        chart["Year"].astype(str)
+        + "-"
+        + chart["Month"].astype(int).astype(str).str.zfill(2)
+    )
+
+    if PLOTLY_AVAILABLE:
+        fig = px.bar(
+            chart,
+            x="Period",
+            y="MonthlyReturnPct",
+            title="Monthly Returns",
+        )
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+        )
+        return
+
+    st.bar_chart(
+        chart.set_index("Period")["MonthlyReturnPct"],
+        use_container_width=True,
+    )
+
+
+def render_win_loss_distribution(trades):
+
+    st.subheader("Win/Loss Distribution")
+
+    if trades.empty:
+        st.info("No win/loss data")
+        return
+
+    distribution = (
+        trades["WinLoss"]
+        .value_counts()
+        .rename_axis("WinLoss")
+        .reset_index(name="Trades")
+    )
+
+    if PLOTLY_AVAILABLE:
+        fig = px.bar(
+            distribution,
+            x="WinLoss",
+            y="Trades",
+            title="Win/Loss Distribution",
+        )
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+        )
+        return
+
+    st.bar_chart(
+        distribution.set_index("WinLoss")["Trades"],
+        use_container_width=True,
+    )
+
+
+def render_return_distribution(trades):
+
+    st.subheader("Return Distribution")
+
+    if trades.empty:
+        st.info("No return data")
+        return
+
+    data = trades.copy()
+    data["NetReturnPct"] = pd.to_numeric(
+        data["NetReturnPct"],
+        errors="coerce",
+    ).fillna(0)
+
+    if PLOTLY_AVAILABLE:
+        fig = px.histogram(
+            data,
+            x="NetReturnPct",
+            nbins=20,
+            title="Return Distribution",
+        )
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+        )
+        return
+
+    buckets = pd.cut(
+        data["NetReturnPct"],
+        bins=10,
+    )
+    distribution = buckets.value_counts().sort_index()
+    distribution.index = distribution.index.astype(str)
+    st.bar_chart(
+        distribution,
+        use_container_width=True,
+    )
+
+
+def filter_trade_analysis(trades):
+
+    filtered = trades.copy()
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+        show_wins = st.checkbox(
+            "Show only wins",
+            value=False,
+        )
+
+    with c2:
+        show_losses = st.checkbox(
+            "Show only losses",
+            value=False,
+        )
+
+    with c3:
+        reasons = sorted(
+            filtered["ExitReason"].dropna().unique()
+        )
+        selected_reasons = st.multiselect(
+            "Filter by ExitReason",
+            reasons,
+            default=reasons,
+        )
+
+    if show_wins and not show_losses:
+        filtered = filtered[
+            filtered["WinLoss"] == "WIN"
+        ]
+    elif show_losses and not show_wins:
+        filtered = filtered[
+            filtered["WinLoss"] == "LOSS"
+        ]
+
+    if selected_reasons:
+        filtered = filtered[
+            filtered["ExitReason"].isin(selected_reasons)
+        ]
+    else:
+        filtered = filtered.iloc[0:0]
+
+    return filtered
+
+
+def render_performance_dashboard(trades, summary, equity_curve, monthly):
+
+    st.header("Performance Dashboard")
+
+    if trades.empty:
+        st.info(
+            "No trades found. Try lowering Min Score or expanding date range."
+        )
+        return
+
+    render_summary_cards(summary)
+
+    chart_left, chart_right = st.columns(2)
+
+    with chart_left:
+        render_line_chart(
+            equity_curve,
+            "ExitDate",
+            "Equity",
+            "Equity Curve",
+        )
+        render_monthly_chart(monthly)
+        render_win_loss_distribution(trades)
+
+    with chart_right:
+        render_line_chart(
+            equity_curve,
+            "ExitDate",
+            "DrawdownPct",
+            "Drawdown Curve",
+        )
+        render_return_distribution(trades)
+
+    st.subheader("Monthly Performance")
+
     st.dataframe(
-        equity_curve,
+        monthly[
+            available_columns(
+                monthly,
+                MONTHLY_COLUMNS,
+            )
+        ],
         use_container_width=True,
         hide_index=True,
     )
+
+    st.subheader("Trade Analysis")
+    filtered_trades = filter_trade_analysis(trades)
+
+    if filtered_trades.empty:
+        st.info("No trades match the selected filters")
+    else:
+        st.dataframe(
+            filtered_trades[
+                available_columns(
+                    filtered_trades,
+                    TRADE_ANALYSIS_COLUMNS,
+                )
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
 
 
 def backtest_page():
 
     st.title("Strategy Lab")
     st.caption(
-        "Phase 2: Buy only when Scanner Decision Engine returns BUY and "
-        "Score >= Min Score. Hold while signal remains BUY. Exit when signal "
-        "changes to WATCH or SKIP, or when an enabled optional exit rule fires."
+        "Phase 2.1: Performance Dashboard uses Strategy Lab trades, equity, "
+        "and monthly performance without changing the trading logic."
     )
     st.caption(
-        f"Trades: {TRADES_FILE} | Summary: {SUMMARY_FILE} | Equity: {EQUITY_FILE}"
+        f"Trades: {TRADES_FILE} | Summary: {SUMMARY_FILE} | "
+        f"Equity: {EQUITY_FILE} | Monthly: {MONTHLY_FILE}"
     )
 
     today = date.today()
@@ -195,7 +478,7 @@ def backtest_page():
         return
 
     with st.spinner("Running Strategy Lab..."):
-        trades, summary, equity_curve = run_strategy_lab(
+        trades, summary, equity_curve, monthly = run_strategy_lab(
             symbol=symbol,
             market=market,
             start_date=start_date,
@@ -212,19 +495,9 @@ def backtest_page():
         )
 
     st.success("Strategy Lab completed")
-
-    st.subheader("Summary Metrics")
-    render_summary(summary)
-
-    st.subheader("Trades")
-
-    if trades.empty:
-        st.info("No trades matched BUY + Min Score")
-    else:
-        st.dataframe(
-            trades,
-            use_container_width=True,
-            hide_index=True,
-        )
-
-    render_equity_curve(equity_curve)
+    render_performance_dashboard(
+        trades,
+        summary,
+        equity_curve,
+        monthly,
+    )

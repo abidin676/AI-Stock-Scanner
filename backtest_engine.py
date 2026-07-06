@@ -14,9 +14,11 @@ from strategy import trend_start
 
 
 OUTPUT_DIR = Path("output")
-TRADES_FILE = OUTPUT_DIR / "backtest_trades.csv"
-SUMMARY_FILE = OUTPUT_DIR / "backtest_summary.csv"
-EQUITY_FILE = OUTPUT_DIR / "backtest_equity_curve.csv"
+INITIAL_CAPITAL = 100000.0
+TRADES_FILE = OUTPUT_DIR / "strategy_lab_trades.csv"
+SUMMARY_FILE = OUTPUT_DIR / "strategy_lab_summary.csv"
+EQUITY_FILE = OUTPUT_DIR / "strategy_lab_equity.csv"
+MONTHLY_FILE = OUTPUT_DIR / "strategy_lab_monthly.csv"
 TRADE_COLUMNS = [
     "Symbol",
     "Market",
@@ -36,12 +38,23 @@ TRADE_COLUMNS = [
     "WinLoss",
 ]
 SUMMARY_COLUMNS = [
+    "Initial Capital",
+    "Final Equity",
+    "Total Return %",
+    "Max Drawdown %",
     "Total Trades",
     "Win Rate",
-    "Avg Return",
-    "Avg Holding Days",
     "Profit Factor",
-    "Max Drawdown",
+    "Avg Win",
+    "Avg Loss",
+    "Best Trade",
+    "Worst Trade",
+    "Avg Holding Days",
+]
+MONTHLY_COLUMNS = [
+    "Year",
+    "Month",
+    "MonthlyReturnPct",
 ]
 
 
@@ -410,7 +423,7 @@ def close_position(
     }
 
 
-def build_equity_curve(trades):
+def build_equity_curve(trades, initial_capital=INITIAL_CAPITAL):
 
     if trades.empty:
         return pd.DataFrame(
@@ -422,7 +435,7 @@ def build_equity_curve(trades):
             ]
         )
 
-    equity = 1.0
+    equity = float(initial_capital)
     rows = []
     peak = equity
 
@@ -442,20 +455,74 @@ def build_equity_curve(trades):
         rows.append({
             "Trade": index + 1,
             "ExitDate": trade["ExitDate"],
-            "Equity": round(equity, 6),
+            "Equity": round(equity, 2),
             "DrawdownPct": round(drawdown, 4),
         })
 
     return pd.DataFrame(rows)
 
 
-def calculate_summary(trades, equity_curve=None):
+def build_monthly_performance(trades):
+
+    if trades.empty:
+        return pd.DataFrame(
+            columns=MONTHLY_COLUMNS
+        )
+
+    data = trades.copy()
+    data["ExitDate"] = pd.to_datetime(
+        data["ExitDate"],
+        errors="coerce",
+    )
+    data["NetReturnPct"] = pd.to_numeric(
+        data["NetReturnPct"],
+        errors="coerce",
+    ).fillna(0)
+    data = data.dropna(
+        subset=[
+            "ExitDate",
+        ]
+    )
+
+    if data.empty:
+        return pd.DataFrame(
+            columns=MONTHLY_COLUMNS
+        )
+
+    data["Year"] = data["ExitDate"].dt.year
+    data["Month"] = data["ExitDate"].dt.month
+    monthly = (
+        data.groupby(
+            [
+                "Year",
+                "Month",
+            ]
+        )["NetReturnPct"]
+        .apply(lambda returns: ((1 + returns / 100).prod() - 1) * 100)
+        .reset_index(name="MonthlyReturnPct")
+    )
+    monthly["MonthlyReturnPct"] = monthly["MonthlyReturnPct"].round(4)
+
+    return monthly[MONTHLY_COLUMNS]
+
+
+def calculate_summary(trades, equity_curve=None, initial_capital=INITIAL_CAPITAL):
 
     if trades.empty:
         return pd.DataFrame([
             {
-                column: 0
-                for column in SUMMARY_COLUMNS
+                "Initial Capital": round(float(initial_capital), 2),
+                "Final Equity": round(float(initial_capital), 2),
+                "Total Return %": 0,
+                "Max Drawdown %": 0,
+                "Total Trades": 0,
+                "Win Rate": 0,
+                "Profit Factor": 0,
+                "Avg Win": 0,
+                "Avg Loss": 0,
+                "Best Trade": 0,
+                "Worst Trade": 0,
+                "Avg Holding Days": 0,
             }
         ])
 
@@ -474,19 +541,42 @@ def calculate_summary(trades, equity_curve=None):
     )
 
     if equity_curve is None:
-        equity_curve = build_equity_curve(trades)
+        equity_curve = build_equity_curve(
+            trades,
+            initial_capital,
+        )
 
     max_drawdown = (
         equity_curve["DrawdownPct"].min()
         if not equity_curve.empty
         else 0
     )
+    final_equity = (
+        float(equity_curve.iloc[-1]["Equity"])
+        if not equity_curve.empty
+        else float(initial_capital)
+    )
+    total_return_pct = (
+        (final_equity - float(initial_capital))
+        / float(initial_capital)
+        * 100
+        if initial_capital
+        else 0
+    )
 
     return pd.DataFrame([
         {
+            "Initial Capital": round(float(initial_capital), 2),
+            "Final Equity": round(final_equity, 2),
+            "Total Return %": round(total_return_pct, 4),
+            "Max Drawdown %": round(float(max_drawdown), 4),
             "Total Trades": int(len(trades)),
             "Win Rate": round((returns > 0).mean() * 100, 2),
-            "Avg Return": round(returns.mean(), 4),
+            "Profit Factor": round(profit_factor, 4),
+            "Avg Win": round(gains.mean(), 4) if not gains.empty else 0,
+            "Avg Loss": round(losses.mean(), 4) if not losses.empty else 0,
+            "Best Trade": round(returns.max(), 4),
+            "Worst Trade": round(returns.min(), 4),
             "Avg Holding Days": round(
                 pd.to_numeric(
                     trades["HoldingDays"],
@@ -494,13 +584,11 @@ def calculate_summary(trades, equity_curve=None):
                 ).fillna(0).mean(),
                 2,
             ),
-            "Profit Factor": round(profit_factor, 4),
-            "Max Drawdown": round(float(max_drawdown), 4),
         }
     ])
 
 
-def save_results(trades, summary, equity_curve):
+def save_results(trades, summary, equity_curve, monthly):
 
     OUTPUT_DIR.mkdir(
         exist_ok=True
@@ -515,6 +603,10 @@ def save_results(trades, summary, equity_curve):
     )
     equity_curve.to_csv(
         EQUITY_FILE,
+        index=False,
+    )
+    monthly.to_csv(
+        MONTHLY_FILE,
         index=False,
     )
 
@@ -579,12 +671,14 @@ def run_strategy_lab(
         trades = pd.DataFrame(columns=TRADE_COLUMNS)
         summary = calculate_summary(trades)
         equity_curve = build_equity_curve(trades)
+        monthly = build_monthly_performance(trades)
         save_results(
             trades,
             summary,
             equity_curve,
+            monthly,
         )
-        return trades, summary, equity_curve
+        return trades, summary, equity_curve, monthly
 
     trades = []
     position = None
@@ -668,6 +762,7 @@ def run_strategy_lab(
         columns=TRADE_COLUMNS,
     )
     equity_curve = build_equity_curve(trades_df)
+    monthly = build_monthly_performance(trades_df)
     summary = calculate_summary(
         trades_df,
         equity_curve,
@@ -676,9 +771,10 @@ def run_strategy_lab(
         trades_df,
         summary,
         equity_curve,
+        monthly,
     )
 
-    return trades_df, summary, equity_curve
+    return trades_df, summary, equity_curve, monthly
 
 
 def run_backtest(
