@@ -45,6 +45,11 @@ SUMMARY_METRICS = [
     "Best Trade",
     "Worst Trade",
     "Avg Holding Days",
+    "Median Return",
+    "Return Std",
+    "Average RR",
+    "Average MAE",
+    "Average MFE",
 ]
 PERCENT_METRICS = {
     "Total Return %",
@@ -54,6 +59,10 @@ PERCENT_METRICS = {
     "Avg Loss",
     "Best Trade",
     "Worst Trade",
+    "Median Return",
+    "Return Std",
+    "Average MAE",
+    "Average MFE",
 }
 MONTHLY_COLUMNS = [
     "Year",
@@ -70,9 +79,36 @@ TRADE_ANALYSIS_COLUMNS = [
     "EntryScore",
     "ExitScore",
     "ExitReason",
+    "Commission",
     "NetReturnPct",
+    "MAE",
+    "MFE",
+    "RiskPct",
+    "RR",
     "WinLoss",
 ]
+TRADE_ANALYTIC_DEFAULTS = [
+    "Commission",
+    "NetReturnPct",
+    "MAE",
+    "MFE",
+    "RiskPct",
+    "RR",
+]
+MONTH_LABELS = {
+    1: "Jan",
+    2: "Feb",
+    3: "Mar",
+    4: "Apr",
+    5: "May",
+    6: "Jun",
+    7: "Jul",
+    8: "Aug",
+    9: "Sep",
+    10: "Oct",
+    11: "Nov",
+    12: "Dec",
+}
 BENCHMARK_OPTIONS = [
     "None",
     "Buy & Hold",
@@ -111,13 +147,70 @@ def available_columns(df, columns):
     ]
 
 
+def safe_float(value, default=0):
+
+    try:
+        if pd.isna(value):
+            return float(default)
+
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def ensure_trade_analysis_defaults(trades):
+
+    df = trades.copy()
+
+    for column in TRADE_ANALYTIC_DEFAULTS:
+        if column not in df.columns:
+            df[column] = 0
+
+        df[column] = pd.to_numeric(
+            df[column],
+            errors="coerce",
+        ).fillna(0)
+
+    return df
+
+
+def ensure_equity_curve_defaults(equity_curve):
+
+    df = equity_curve.copy()
+
+    if df.empty:
+        return df
+
+    if "Equity" not in df.columns:
+        df["Equity"] = INITIAL_CAPITAL
+
+    df["Equity"] = pd.to_numeric(
+        df["Equity"],
+        errors="coerce",
+    ).fillna(INITIAL_CAPITAL)
+
+    if "PeakEquity" not in df.columns:
+        df["PeakEquity"] = df["Equity"].cummax()
+
+    df["PeakEquity"] = pd.to_numeric(
+        df["PeakEquity"],
+        errors="coerce",
+    ).fillna(df["Equity"]).cummax()
+
+    if "DrawdownPct" not in df.columns:
+        df["DrawdownPct"] = (
+            df["Equity"] / df["PeakEquity"] - 1
+        ) * 100
+
+    if "IsNewHigh" not in df.columns:
+        df["IsNewHigh"] = df["Equity"] >= df["PeakEquity"]
+
+    return df
+
+
 def format_metric_value(metric, value):
 
-    value = float(
-        value
-        if pd.notna(value)
-        else 0
-    )
+    value = safe_float(value)
     suffix = "%" if metric in COMPARISON_PERCENT_METRICS else ""
 
     return f"{value:,.2f}{suffix}"
@@ -591,7 +684,7 @@ def render_summary_cards(summary):
         suffix = "%" if metric in PERCENT_METRICS else ""
         columns[index % 4].metric(
             metric,
-            f"{float(value):,.2f}{suffix}",
+            f"{safe_float(value):,.2f}{suffix}",
         )
 
 
@@ -672,6 +765,97 @@ def render_monthly_chart(monthly):
     )
 
 
+def render_monthly_heatmap(monthly):
+
+    st.subheader("Monthly Heatmap")
+
+    if monthly.empty:
+        st.info("No monthly heatmap")
+        return
+
+    data = monthly.copy()
+    data["Year"] = pd.to_numeric(
+        data["Year"],
+        errors="coerce",
+    )
+    data["Month"] = pd.to_numeric(
+        data["Month"],
+        errors="coerce",
+    )
+    data["MonthlyReturnPct"] = pd.to_numeric(
+        data["MonthlyReturnPct"],
+        errors="coerce",
+    )
+    data = data.dropna(
+        subset=[
+            "Year",
+            "Month",
+            "MonthlyReturnPct",
+        ]
+    )
+
+    if data.empty:
+        st.info("No monthly heatmap")
+        return
+
+    data["Year"] = data["Year"].astype(int)
+    data["Month"] = data["Month"].astype(int)
+    heatmap = data.pivot_table(
+        index="Year",
+        columns="Month",
+        values="MonthlyReturnPct",
+        aggfunc="sum",
+    ).reindex(
+        columns=list(range(1, 13))
+    )
+    heatmap = heatmap.rename(
+        columns=MONTH_LABELS
+    )
+    max_abs_return = max(
+        abs(
+            safe_float(
+                heatmap.min().min()
+            )
+        ),
+        abs(
+            safe_float(
+                heatmap.max().max()
+            )
+        ),
+        1,
+    )
+
+    if PLOTLY_AVAILABLE:
+        fig = px.imshow(
+            heatmap,
+            aspect="auto",
+            color_continuous_scale=[
+                (0, "#ef4444"),
+                (0.5, "#f8fafc"),
+                (1, "#22c55e"),
+            ],
+            labels={
+                "x": "Month",
+                "y": "Year",
+                "color": "Return %",
+            },
+            text_auto=".2f",
+            zmin=-max_abs_return,
+            zmax=max_abs_return,
+            title="Monthly Return Heatmap",
+        )
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+        )
+        return
+
+    st.dataframe(
+        heatmap.fillna(0).round(2),
+        use_container_width=True,
+    )
+
+
 def render_win_loss_distribution(trades):
 
     st.subheader("Win/Loss Distribution")
@@ -706,6 +890,29 @@ def render_win_loss_distribution(trades):
     )
 
 
+def render_return_distribution_stats(trades):
+
+    returns = pd.to_numeric(
+        trades["NetReturnPct"],
+        errors="coerce",
+    ).fillna(0)
+
+    stats = {
+        "Mean Return": returns.mean(),
+        "Median Return": returns.median(),
+        "Std Return": returns.std(ddof=0),
+        "Skew": returns.skew() if len(returns) > 2 else 0,
+    }
+    columns = st.columns(4)
+
+    for index, (label, value) in enumerate(stats.items()):
+        suffix = "" if label == "Skew" else "%"
+        columns[index].metric(
+            label,
+            f"{safe_float(value):,.2f}{suffix}",
+        )
+
+
 def render_return_distribution(trades):
 
     st.subheader("Return Distribution")
@@ -719,6 +926,7 @@ def render_return_distribution(trades):
         data["NetReturnPct"],
         errors="coerce",
     ).fillna(0)
+    render_return_distribution_stats(data)
 
     if PLOTLY_AVAILABLE:
         fig = px.histogram(
@@ -801,6 +1009,9 @@ def render_performance_dashboard(trades, summary, equity_curve, monthly):
         )
         return
 
+    trades = ensure_trade_analysis_defaults(trades)
+    equity_curve = ensure_equity_curve_defaults(equity_curve)
+
     render_summary_cards(summary)
 
     chart_left, chart_right = st.columns(2)
@@ -813,6 +1024,7 @@ def render_performance_dashboard(trades, summary, equity_curve, monthly):
             "Equity Curve",
         )
         render_monthly_chart(monthly)
+        render_monthly_heatmap(monthly)
         render_win_loss_distribution(trades)
 
     with chart_right:
@@ -859,8 +1071,8 @@ def backtest_page():
 
     st.title("Strategy Lab")
     st.caption(
-        "Phase 2.2: Strategy History and Benchmark comparison build on "
-        "Strategy Lab outputs without changing the trading logic."
+        "Phase 2.3: Performance analytics build on Strategy Lab outputs "
+        "without changing the trading logic."
     )
     st.caption(
         f"Trades: {TRADES_FILE} | Summary: {SUMMARY_FILE} | "

@@ -33,8 +33,13 @@ TRADE_COLUMNS = [
     "EntryScore",
     "ExitScore",
     "ExitReason",
+    "Commission",
     "GrossReturnPct",
     "NetReturnPct",
+    "MAE",
+    "MFE",
+    "RiskPct",
+    "RR",
     "WinLoss",
 ]
 SUMMARY_COLUMNS = [
@@ -50,6 +55,11 @@ SUMMARY_COLUMNS = [
     "Best Trade",
     "Worst Trade",
     "Avg Holding Days",
+    "Median Return",
+    "Return Std",
+    "Average RR",
+    "Average MAE",
+    "Average MFE",
 ]
 MONTHLY_COLUMNS = [
     "Year",
@@ -377,19 +387,94 @@ def calculate_trade_returns(entry_price, exit_price, market):
         if net_cost
         else 0
     )
+    commission = (
+        buy_fee["total_fee"]
+        + sell_fee["total_fee"]
+    )
 
-    return round(gross_return_pct, 4), round(net_return_pct, 4)
+    return (
+        round(gross_return_pct, 4),
+        round(net_return_pct, 4),
+        round(commission, 4),
+    )
+
+
+def calculate_trade_excursion(history, position, exit_index):
+
+    trade_window = history.iloc[
+        position.entry_index:exit_index + 1
+    ]
+
+    if trade_window.empty or not position.entry_price:
+        return 0, 0
+
+    lowest_low = pd.to_numeric(
+        trade_window["low"],
+        errors="coerce",
+    ).min()
+    highest_high = pd.to_numeric(
+        trade_window["high"],
+        errors="coerce",
+    ).max()
+
+    if pd.isna(lowest_low) or pd.isna(highest_high):
+        return 0, 0
+
+    raw_mae = (
+        (float(lowest_low) - position.entry_price)
+        / position.entry_price
+        * 100
+    )
+    raw_mfe = (
+        (float(highest_high) - position.entry_price)
+        / position.entry_price
+        * 100
+    )
+    mae = min(
+        raw_mae,
+        0,
+    )
+    mfe = max(
+        raw_mfe,
+        0,
+    )
+
+    return round(mae, 4), round(mfe, 4)
+
+
+def calculate_risk_reward(
+    net_return_pct,
+    mae,
+    stop_loss_enabled=False,
+    stop_loss_pct=0,
+):
+
+    risk_pct = (
+        float(stop_loss_pct)
+        if stop_loss_enabled and float(stop_loss_pct) > 0
+        else abs(float(mae))
+    )
+    rr = (
+        float(net_return_pct) / risk_pct
+        if risk_pct > 0
+        else 0
+    )
+
+    return round(risk_pct, 4), round(rr, 4)
 
 
 def close_position(
     symbol,
     market,
+    history,
     position,
     row,
     decision,
     reason,
     index,
     exit_price=None,
+    stop_loss_enabled=False,
+    stop_loss_pct=0,
 ):
 
     exit_price = (
@@ -397,10 +482,21 @@ def close_position(
         if exit_price is None
         else float(exit_price)
     )
-    gross_return_pct, net_return_pct = calculate_trade_returns(
+    gross_return_pct, net_return_pct, commission = calculate_trade_returns(
         position.entry_price,
         exit_price,
         market,
+    )
+    mae, mfe = calculate_trade_excursion(
+        history,
+        position,
+        index,
+    )
+    risk_pct, rr = calculate_risk_reward(
+        net_return_pct,
+        mae,
+        stop_loss_enabled,
+        stop_loss_pct,
     )
 
     return {
@@ -417,8 +513,13 @@ def close_position(
         "EntryScore": round(position.entry_score, 2),
         "ExitScore": round(float(decision.get("score", 0) or 0), 2),
         "ExitReason": reason,
+        "Commission": commission,
         "GrossReturnPct": gross_return_pct,
         "NetReturnPct": net_return_pct,
+        "MAE": mae,
+        "MFE": mfe,
+        "RiskPct": risk_pct,
+        "RR": rr,
         "WinLoss": "WIN" if net_return_pct > 0 else "LOSS",
     }
 
@@ -431,7 +532,9 @@ def build_equity_curve(trades, initial_capital=INITIAL_CAPITAL):
                 "Trade",
                 "ExitDate",
                 "Equity",
+                "PeakEquity",
                 "DrawdownPct",
+                "IsNewHigh",
             ]
         )
 
@@ -448,6 +551,7 @@ def build_equity_curve(trades, initial_capital=INITIAL_CAPITAL):
             peak,
             equity,
         )
+        is_new_high = equity >= peak
         drawdown = (
             equity / peak - 1
         ) * 100
@@ -456,7 +560,9 @@ def build_equity_curve(trades, initial_capital=INITIAL_CAPITAL):
             "Trade": index + 1,
             "ExitDate": trade["ExitDate"],
             "Equity": round(equity, 2),
+            "PeakEquity": round(peak, 2),
             "DrawdownPct": round(drawdown, 4),
+            "IsNewHigh": bool(is_new_high),
         })
 
     return pd.DataFrame(rows)
@@ -506,6 +612,21 @@ def build_monthly_performance(trades):
     return monthly[MONTHLY_COLUMNS]
 
 
+def numeric_trade_column(trades, column):
+
+    if column not in trades.columns:
+        return pd.Series(
+            0,
+            index=trades.index,
+            dtype="float64",
+        )
+
+    return pd.to_numeric(
+        trades[column],
+        errors="coerce",
+    ).fillna(0)
+
+
 def calculate_summary(trades, equity_curve=None, initial_capital=INITIAL_CAPITAL):
 
     if trades.empty:
@@ -523,13 +644,30 @@ def calculate_summary(trades, equity_curve=None, initial_capital=INITIAL_CAPITAL
                 "Best Trade": 0,
                 "Worst Trade": 0,
                 "Avg Holding Days": 0,
+                "Median Return": 0,
+                "Return Std": 0,
+                "Average RR": 0,
+                "Average MAE": 0,
+                "Average MFE": 0,
             }
         ])
 
-    returns = pd.to_numeric(
-        trades["NetReturnPct"],
-        errors="coerce",
-    ).fillna(0)
+    returns = numeric_trade_column(
+        trades,
+        "NetReturnPct",
+    )
+    rr = numeric_trade_column(
+        trades,
+        "RR",
+    )
+    mae = numeric_trade_column(
+        trades,
+        "MAE",
+    )
+    mfe = numeric_trade_column(
+        trades,
+        "MFE",
+    )
     gains = returns[returns > 0]
     losses = returns[returns < 0]
     total_gain = gains.sum()
@@ -584,6 +722,14 @@ def calculate_summary(trades, equity_curve=None, initial_capital=INITIAL_CAPITAL
                 ).fillna(0).mean(),
                 2,
             ),
+            "Median Return": round(returns.median(), 4),
+            "Return Std": round(
+                returns.std(ddof=0),
+                4,
+            ),
+            "Average RR": round(rr.mean(), 4),
+            "Average MAE": round(mae.mean(), 4),
+            "Average MFE": round(mfe.mean(), 4),
         }
     ])
 
@@ -724,12 +870,15 @@ def run_strategy_lab(
                 close_position(
                     symbol,
                     market,
+                    df,
                     position,
                     row,
                     decision,
                     exit_decision.reason,
                     index,
                     exit_decision.exit_price,
+                    enable_stop_loss,
+                    stop_loss_pct,
                 )
             )
             position = None
@@ -749,11 +898,14 @@ def run_strategy_lab(
             close_position(
                 symbol,
                 market,
+                df,
                 position,
                 row,
                 decision,
                 "End of Data",
                 int(row.name),
+                stop_loss_enabled=enable_stop_loss,
+                stop_loss_pct=stop_loss_pct,
             )
         )
 
