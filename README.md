@@ -45,6 +45,12 @@ Start the dashboard:
 python -m streamlit run dashboard.py
 ```
 
+Benchmark scanner performance:
+
+```powershell
+python tools/benchmark_scanner.py --workers 8
+```
+
 Then open:
 
 ```text
