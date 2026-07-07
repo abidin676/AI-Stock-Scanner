@@ -1,4 +1,7 @@
 import os
+import time
+from datetime import datetime
+from collections import defaultdict
 import pandas as pd
 
 from providers.thai import get_symbols
@@ -7,6 +10,10 @@ from indicators import add_indicators
 from strategy import trend_start
 from providers.usa import get_symbols as get_us_symbols
 from alert_engine import run_watchlist_alert_check
+from market_quality import (
+    calculate_market_quality,
+    save_market_quality,
+)
 from config import (
     SCAN_MARKETS,
     OUTPUT_FOLDER,
@@ -267,15 +274,44 @@ def show_summary(df):
         )
 
 
+def save_market_quality_summary(
+    df,
+    market_scan_seconds,
+    last_scan_time,
+):
+
+    quality = calculate_market_quality(
+        df,
+        scan_time_seconds=market_scan_seconds,
+        last_scan_time=last_scan_time,
+    )
+    output_path = save_market_quality(quality)
+
+    print("\n========== MARKET QUALITY ==========\n")
+    print(
+        quality.to_string(
+            index=False
+        )
+    )
+    print(f"\nSaved Market Quality: {output_path}")
+
+
 def main():
 
     all_results = []
+    market_scan_seconds = defaultdict(float)
 
     for index, market in SCAN_MARKETS:
+
+        scan_start = time.perf_counter()
 
         df = scan_market(
             index=index,
             market=market
+        )
+
+        market_scan_seconds[market.upper()] += (
+            time.perf_counter() - scan_start
         )
 
         all_results.append(df)
@@ -315,6 +351,12 @@ def main():
     )
 
     save_results(df)
+
+    save_market_quality_summary(
+        df,
+        market_scan_seconds,
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    )
 
     run_watchlist_alerts(df)
 

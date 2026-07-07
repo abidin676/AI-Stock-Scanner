@@ -5,6 +5,11 @@ import html
 import pandas as pd
 import streamlit as st
 
+from market_quality import (
+    calculate_market_quality,
+    latest_market_quality_with_trend,
+    load_market_quality,
+)
 from watchlist import add_to_watchlist
 
 
@@ -34,6 +39,18 @@ ROW_COLORS = {
     "EXTENDED": "#ffedd5",
     "SKIP": "#f3f4f6",
 }
+QUALITY_DISPLAY_COLUMNS = [
+    "Market",
+    "QualityScore",
+    "QualityLabel",
+    "Trend",
+    "TotalStocks",
+    "BuyCount",
+    "AvgBuyScore",
+    "BreakoutCount",
+    "ScanTimeSeconds",
+    "LastScanTime",
+]
 
 
 def signal_group(signal):
@@ -109,6 +126,44 @@ def safe_number(value):
         return 0.0
 
 
+def format_quality_number(value, suffix=""):
+
+    return f"{safe_number(value):,.2f}{suffix}"
+
+
+def latest_quality_from_results(df, last_scan):
+
+    quality = calculate_market_quality(
+        df,
+        scan_time_seconds={},
+        last_scan_time=last_scan,
+    )
+    quality["Trend"] = "N/A"
+
+    return quality
+
+
+def load_quality_for_dashboard(df, last_scan):
+
+    history = load_market_quality()
+
+    if history.empty:
+        return latest_quality_from_results(
+            df,
+            last_scan,
+        )
+
+    latest = latest_market_quality_with_trend(history)
+
+    if latest.empty:
+        return latest_quality_from_results(
+            df,
+            last_scan,
+        )
+
+    return latest
+
+
 def watchlist_label(row):
 
     return (
@@ -163,6 +218,105 @@ def apply_filters(df, market_filter, signal_filter, symbol_search):
         ]
 
     return sort_results(data)
+
+
+def render_market_quality_cards(df, last_scan):
+
+    quality = load_quality_for_dashboard(
+        df,
+        last_scan,
+    )
+
+    st.subheader("Market Quality")
+
+    cards = st.columns(2)
+
+    for index, market in enumerate(("SET", "USA")):
+        row = quality[
+            quality["Market"].astype(str).str.upper() == market
+        ]
+
+        with cards[index]:
+            if row.empty:
+                st.info(f"No {market} market quality")
+                continue
+
+            data = row.iloc[0]
+            trend = data.get(
+                "Trend",
+                "N/A",
+            )
+            label = data.get(
+                "QualityLabel",
+                "",
+            )
+
+            st.metric(
+                f"{market} Quality Score",
+                format_quality_number(
+                    data.get(
+                        "QualityScore",
+                        0,
+                    )
+                ),
+                f"Trend {trend}",
+            )
+            st.caption(label)
+
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric(
+                "BUY Count",
+                int(
+                    safe_number(
+                        data.get(
+                            "BuyCount",
+                            0,
+                        )
+                    )
+                ),
+            )
+            c2.metric(
+                "Avg BUY Score",
+                format_quality_number(
+                    data.get(
+                        "AvgBuyScore",
+                        0,
+                    )
+                ),
+            )
+            c3.metric(
+                "Breakout Count",
+                int(
+                    safe_number(
+                        data.get(
+                            "BreakoutCount",
+                            0,
+                        )
+                    )
+                ),
+            )
+            c4.metric(
+                "Scan Time",
+                format_quality_number(
+                    data.get(
+                        "ScanTimeSeconds",
+                        0,
+                    ),
+                    "s",
+                ),
+            )
+
+    with st.expander("Market Quality Details"):
+        display_columns = [
+            column
+            for column in QUALITY_DISPLAY_COLUMNS
+            if column in quality.columns
+        ]
+        st.dataframe(
+            quality[display_columns],
+            use_container_width=True,
+            hide_index=True,
+        )
 
 
 def render_table(df):
@@ -420,6 +574,11 @@ def scanner_page():
     ).strftime("%d/%m/%Y %H:%M:%S")
 
     st.caption(f"Last Scan: {last_scan}")
+
+    render_market_quality_cards(
+        df,
+        last_scan,
+    )
 
     st.sidebar.header("Filter")
 
