@@ -28,4 +28,4 @@ python scanner.py
 
 echo.
 echo Opening Dashboard...
-start "" streamlit run dashboard.py
+start "" python -m streamlit run dashboard.py

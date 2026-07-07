@@ -22,7 +22,7 @@ while True:
 
     elif choice == "2":
 
-        os.system("streamlit run dashboard.py")
+        os.system("python -m streamlit run dashboard.py")
 
     elif choice == "3":
 

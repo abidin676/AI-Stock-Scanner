@@ -13,7 +13,7 @@ python scanner.py
 
 echo.
 echo [2/2] Starting Dashboard...
-start "" streamlit run dashboard.py
+start "" python -m streamlit run dashboard.py
 
 echo.
 echo Dashboard is running.
