@@ -1,7 +1,230 @@
+from datetime import datetime
+from pathlib import Path
+import re
+
 import pandas as pd
 from ta.volatility import AverageTrueRange
 from ta.trend import EMAIndicator, MACD
 from ta.momentum import RSIIndicator
+
+
+INDICATOR_CACHE_DIR = Path("data") / "indicator_cache"
+INDICATOR_COLUMNS = [
+    "ema9",
+    "ema20",
+    "ema50",
+    "ema200",
+    "rsi",
+    "rsi_slope",
+    "macd",
+    "macd_signal",
+    "macd_hist",
+    "macd_hist_slope",
+    "vol20",
+    "rvol",
+    "atr",
+    "atr20",
+    "atr_compression",
+    "ema_spread",
+    "ema_compression",
+    "distance_ema20",
+    "low90",
+    "move_from_low90",
+    "ema9_slope",
+    "ema20_slope",
+    "ema50_slope",
+    "ema200_slope",
+    "ema_alignment",
+    "dry_volume",
+    "higher_low",
+    "higher_high",
+    "trend_change",
+    "high20",
+    "break20",
+    "high55",
+    "break55",
+    "pivot20",
+    "near_pivot",
+    "strong_close",
+    "close_above_prev_high",
+    "pocket_pivot",
+    "nr7",
+    "inside_bar",
+    "volume_breakout",
+    "pivot_breakout",
+]
+BOOLEAN_COLUMNS = [
+    "atr_compression",
+    "ema_compression",
+    "dry_volume",
+    "higher_low",
+    "higher_high",
+    "trend_change",
+    "break20",
+    "break55",
+    "near_pivot",
+    "strong_close",
+    "close_above_prev_high",
+    "pocket_pivot",
+    "nr7",
+    "inside_bar",
+    "volume_breakout",
+    "pivot_breakout",
+]
+
+
+def indicator_cache_path(
+    symbol,
+    market="USA",
+    period="1y",
+    interval="1d",
+):
+
+    key = "_".join(
+        [
+            str(market).upper().strip(),
+            str(symbol).upper().strip(),
+            str(period).strip(),
+            str(interval).strip(),
+        ]
+    )
+    filename = re.sub(
+        r"[^A-Za-z0-9_.-]+",
+        "_",
+        key,
+    )
+
+    return INDICATOR_CACHE_DIR / f"{filename}.pkl"
+
+
+def is_indicator_cache_fresh(path):
+
+    if not path.exists():
+        return False
+
+    modified_date = datetime.fromtimestamp(
+        path.stat().st_mtime
+    ).date()
+
+    return modified_date == datetime.now().date()
+
+
+def has_indicator_columns(df):
+
+    return all(
+        column in df.columns
+        for column in INDICATOR_COLUMNS
+    )
+
+
+def normalize_indicator_cache(df):
+
+    if df.empty:
+        return df
+
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(
+            df["date"],
+            errors="coerce",
+        )
+
+    for column in (
+        "symbol",
+        "market",
+    ):
+        if column in df.columns:
+            df[column] = df[column].astype(str).str.upper()
+
+    for column in BOOLEAN_COLUMNS:
+        if column not in df.columns:
+            continue
+
+        if df[column].dtype == bool:
+            continue
+
+        df[column] = (
+            df[column]
+            .astype(str)
+            .str.lower()
+            .isin(
+                [
+                    "true",
+                    "1",
+                    "yes",
+                ]
+            )
+        )
+
+    for column in df.columns:
+        if column in (
+            "date",
+            "symbol",
+            "market",
+        ) or column in BOOLEAN_COLUMNS:
+            continue
+
+        df[column] = pd.to_numeric(
+            df[column],
+            errors="coerce",
+        )
+
+    return df
+
+
+def load_indicator_cache(path):
+
+    try:
+        df = pd.read_pickle(path)
+    except Exception:
+        return pd.DataFrame()
+
+    if not has_indicator_columns(df):
+        return pd.DataFrame()
+
+    return normalize_indicator_cache(df)
+
+
+def save_indicator_cache(path, df):
+
+    INDICATOR_CACHE_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    df.to_pickle(path)
+
+
+def add_indicators_cached(
+    df,
+    symbol,
+    market="USA",
+    period="1y",
+    interval="1d",
+    force_refresh=False,
+):
+
+    if has_indicator_columns(df):
+        return df, True
+
+    path = indicator_cache_path(
+        symbol,
+        market,
+        period,
+        interval,
+    )
+
+    if not force_refresh and is_indicator_cache_fresh(path):
+        cached = load_indicator_cache(path)
+
+        if not cached.empty:
+            return cached, True
+
+    df = add_indicators(df)
+    save_indicator_cache(
+        path,
+        df,
+    )
+
+    return df, False
 
 
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:

@@ -233,22 +233,33 @@ def format_seconds(value):
     return f"{float(value):.2f}s"
 
 
-def build_summary(rows):
+def build_summary(rows, modes=None):
+
+    modes = modes or MODES
 
     by_mode = {
         mode: {}
-        for mode in MODES
+        for mode in modes
     }
 
     for row in rows:
+        run_type = row["RunType"]
+        current = by_mode.setdefault(
+            row["Mode"],
+            {},
+        ).get(run_type)
+
+        if current and float(current["TotalTime"]) <= float(row["TotalTime"]):
+            continue
+
         by_mode.setdefault(
             row["Mode"],
             {},
-        )[row["RunType"]] = row
+        )[run_type] = row
 
     summary = []
 
-    for mode in MODES:
+    for mode in modes:
         cold = by_mode.get(
             mode,
             {},
@@ -288,6 +299,112 @@ def build_summary(rows):
         )
 
     return summary
+
+
+def build_worker_summary(rows):
+
+    grouped = {}
+
+    for row in rows:
+        if not row["Success"]:
+            continue
+
+        workers = int(row["Workers"])
+        grouped.setdefault(
+            workers,
+            [],
+        ).append(float(row["TotalTime"]))
+
+    summary = []
+
+    for workers, totals in sorted(grouped.items()):
+        total_time = sum(totals)
+        avg_time = total_time / len(totals)
+        summary.append({
+            "Workers": workers,
+            "Runs": len(totals),
+            "Avg Total": f"{avg_time:.2f}s",
+            "Combined Total": f"{total_time:.2f}s",
+            "_avg": avg_time,
+        })
+
+    return summary
+
+
+def print_worker_summary(rows):
+
+    summary = build_worker_summary(rows)
+
+    if not summary:
+        return
+
+    best = min(
+        summary,
+        key=lambda row: row["_avg"],
+    )
+    display = [
+        {
+            key: value
+            for key, value in row.items()
+            if key != "_avg"
+        }
+        for row in summary
+    ]
+
+    print("\nWorker Benchmark")
+    print_table(
+        display,
+        [
+            "Workers",
+            "Runs",
+            "Avg Total",
+            "Combined Total",
+        ],
+    )
+    print(f"\nBest worker count: {best['Workers']}")
+
+
+def parse_worker_values(raw):
+
+    values = []
+
+    for part in str(raw).split(","):
+        part = part.strip()
+
+        if not part:
+            continue
+
+        values.append(int(part))
+
+    if not values:
+        raise ValueError("No worker values provided")
+
+    return values
+
+
+def parse_modes(raw):
+
+    if not raw:
+        return MODES
+
+    requested = [
+        part.strip()
+        for part in str(raw).split(",")
+        if part.strip()
+    ]
+    invalid = [
+        mode
+        for mode in requested
+        if mode not in MODES
+    ]
+
+    if invalid:
+        valid = ", ".join(MODES)
+        raise ValueError(
+            f"Unknown mode(s): {', '.join(invalid)}. Valid modes: {valid}"
+        )
+
+    return requested
 
 
 def print_table(rows, columns):
@@ -346,6 +463,21 @@ def parse_args():
         action="store_true",
         help="Skip cached warm runs.",
     )
+    parser.add_argument(
+        "--worker-suite",
+        action="store_true",
+        help="Run benchmark for multiple worker counts.",
+    )
+    parser.add_argument(
+        "--worker-values",
+        default="4,8,12,16",
+        help="Comma-separated worker counts for --worker-suite.",
+    )
+    parser.add_argument(
+        "--modes",
+        default=",".join(MODES),
+        help="Comma-separated modes to run.",
+    )
 
     return parser.parse_args()
 
@@ -359,28 +491,37 @@ def main():
 
     snapshots = snapshot_state()
     rows = []
+    modes = parse_modes(args.modes)
+    workers_list = (
+        parse_worker_values(args.worker_values)
+        if args.worker_suite
+        else [
+            args.workers,
+        ]
+    )
 
     try:
-        for mode in MODES:
-            if not args.skip_cold:
-                print(f"\n[{mode}] Cold run")
-                rows.append(
-                    run_scanner(
-                        mode,
-                        "Cold",
-                        args.workers,
+        for workers in workers_list:
+            for mode in modes:
+                if not args.skip_cold:
+                    print(f"\n[{mode}] Cold run | workers={workers}")
+                    rows.append(
+                        run_scanner(
+                            mode,
+                            "Cold",
+                            workers,
+                        )
                     )
-                )
 
-            if not args.skip_warm:
-                print(f"\n[{mode}] Warm run")
-                rows.append(
-                    run_scanner(
-                        mode,
-                        "Warm",
-                        args.workers,
+                if not args.skip_warm:
+                    print(f"\n[{mode}] Warm run | workers={workers}")
+                    rows.append(
+                        run_scanner(
+                            mode,
+                            "Warm",
+                            workers,
+                        )
                     )
-                )
     finally:
         restore_state(snapshots)
 
@@ -389,7 +530,7 @@ def main():
     print(f"\nSaved benchmark: {OUTPUT_FILE}")
     print("\nMode | Cold Total | Warm Total | Speedup")
     print_table(
-        build_summary(rows),
+        build_summary(rows, modes),
         [
             "Mode",
             "Cold Total",
@@ -397,6 +538,7 @@ def main():
             "Speedup",
         ],
     )
+    print_worker_summary(rows)
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ import pandas as pd
 
 from providers.thai import get_symbols
 from data import get_histories
-from indicators import add_indicators
+from indicators import add_indicators_cached
 from strategy import trend_start
 from providers.usa import get_symbols as get_us_symbols
 from alert_engine import run_watchlist_alert_check
@@ -30,6 +30,10 @@ from config import (
 
 OUTPUT_DIR = OUTPUT_FOLDER
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+PROFILE_FILE = os.path.join(
+    OUTPUT_DIR,
+    "scanner_profile.csv",
+)
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -162,7 +166,18 @@ def load_symbols(index, market):
     raise ValueError(f"Unknown market: {market}")
 
 
-def process_symbol(symbol, market, df):
+def process_symbol(
+    symbol,
+    market,
+    df,
+    force_refresh=False,
+):
+
+    profile = {
+        "indicator_time": 0.0,
+        "decision_time": 0.0,
+        "indicator_cache_hit": False,
+    }
 
     if df.empty:
         return {
@@ -171,12 +186,30 @@ def process_symbol(symbol, market, df):
             "decision": None,
             "error": None,
             "message": "No Data",
+            "profile": profile,
         }
 
-    df = add_indicators(df)
+    indicator_start = time.perf_counter()
+    df, cache_hit = add_indicators_cached(
+        df,
+        symbol,
+        market=market,
+        period=PERIOD,
+        interval=INTERVAL,
+        force_refresh=force_refresh,
+    )
+    profile["indicator_time"] = (
+        time.perf_counter() - indicator_start
+    )
+    profile["indicator_cache_hit"] = cache_hit
+
+    decision_start = time.perf_counter()
     result = trend_start(
         df,
         market=market,
+    )
+    profile["decision_time"] = (
+        time.perf_counter() - decision_start
     )
 
     return {
@@ -198,6 +231,7 @@ def process_symbol(symbol, market, df):
             f"{result['signal']} | "
             f"Score {result['score']}"
         ),
+        "profile": profile,
     }
 
 
@@ -217,6 +251,7 @@ def scan_market(
     )
 
     results = []
+    payloads = []
     total_start = time.perf_counter()
 
     print(f"\n========== SCANNING {index} ==========\n")
@@ -246,6 +281,7 @@ def scan_market(
                 symbol,
                 market,
                 histories.get(symbol, pd.DataFrame()),
+                force_refresh,
             ): symbol
             for symbol in symbols
         }
@@ -263,6 +299,8 @@ def scan_market(
                 print(f"   ERROR : {e}")
                 continue
 
+            payloads.append(payload)
+
             if payload["message"]:
                 print(f"   {payload['message']}")
 
@@ -279,11 +317,27 @@ def scan_market(
 
     processing_time = time.perf_counter() - processing_start
     total_time = time.perf_counter() - total_start
+    indicator_total = sum(
+        payload.get("profile", {}).get("indicator_time", 0.0)
+        for payload in payloads
+    )
+    decision_total = sum(
+        payload.get("profile", {}).get("decision_time", 0.0)
+        for payload in payloads
+    )
+    cache_hits = sum(
+        1
+        for payload in payloads
+        if payload.get("profile", {}).get("indicator_cache_hit")
+    )
     timing = {
         "Index": index,
         "Market": market,
         "Symbols": len(symbols),
         "Download Time": round(download_time, 2),
+        "Indicator Time": round(indicator_total, 2),
+        "Decision Time": round(decision_total, 2),
+        "Indicator Cache Hits": cache_hits,
         "Processing Time": round(processing_time, 2),
         "Total Time": round(total_time, 2),
     }
@@ -323,6 +377,7 @@ def scan_market_legacy(index="SET", market="SET", force_refresh=False):
                 symbol,
                 market,
                 histories.get(symbol, pd.DataFrame()),
+                force_refresh,
             )
 
             if payload["row"] is None:
@@ -338,39 +393,49 @@ def scan_market_legacy(index="SET", market="SET", force_refresh=False):
 
 def save_results(df):
 
+    export_start = time.perf_counter()
+
     if df.empty:
         print("\nNo Result")
-        return
+        return 0.0
 
     csv_path = os.path.join(
         OUTPUT_DIR,
-        "scanner_results.csv"
+        CSV_FILE,
     )
 
     excel_path = os.path.join(
         OUTPUT_DIR,
-        "scanner_results.xlsx"
+        EXCEL_FILE,
     )
 
-    df.to_csv(csv_path, index=False)
+    if SAVE_CSV:
+        df.to_csv(csv_path, index=False)
 
-    df.to_excel(excel_path, index=False)
+    if SAVE_EXCEL:
+        df.to_excel(excel_path, index=False)
 
     print("\nSaved")
 
-    print(csv_path)
+    if SAVE_CSV:
+        print(csv_path)
 
-    print(excel_path)
+    if SAVE_EXCEL:
+        print(excel_path)
+
+    return time.perf_counter() - export_start
 
 
 def run_watchlist_alerts(df):
+
+    alert_start = time.perf_counter()
 
     try:
         alerts = run_watchlist_alert_check(df)
 
         if alerts.empty:
             print("\nWatchlist Alerts : none")
-            return
+            return time.perf_counter() - alert_start
 
         print(f"\nWatchlist Alerts : {len(alerts)}")
         print(
@@ -388,6 +453,8 @@ def run_watchlist_alerts(df):
 
     except Exception as e:
         print(f"\nWatchlist Alerts ERROR : {e}")
+
+    return time.perf_counter() - alert_start
 
 
 def show_summary(df):
@@ -474,6 +541,7 @@ def save_market_quality_summary(
     last_scan_time,
 ):
 
+    quality_start = time.perf_counter()
     quality = calculate_market_quality(
         df,
         scan_time_seconds=market_scan_seconds,
@@ -489,6 +557,8 @@ def save_market_quality_summary(
     )
     print(f"\nSaved Market Quality: {output_path}")
 
+    return time.perf_counter() - quality_start
+
 
 def show_scan_duration(scan_timings, total_time):
 
@@ -497,12 +567,18 @@ def show_scan_duration(scan_timings, total_time):
 
     summary = pd.DataFrame(scan_timings)
     total_download = summary["Download Time"].sum()
+    total_indicators = summary["Indicator Time"].sum()
+    total_decision = summary["Decision Time"].sum()
     total_processing = summary["Processing Time"].sum()
+    total_cache_hits = summary["Indicator Cache Hits"].sum()
     total_row = {
         "Index": "TOTAL",
         "Market": "ALL",
         "Symbols": int(summary["Symbols"].sum()),
         "Download Time": round(total_download, 2),
+        "Indicator Time": round(total_indicators, 2),
+        "Decision Time": round(total_decision, 2),
+        "Indicator Cache Hits": int(total_cache_hits),
         "Processing Time": round(total_processing, 2),
         "Total Time": round(total_time, 2),
     }
@@ -516,10 +592,114 @@ def show_scan_duration(scan_timings, total_time):
 
     print("\n========== SCAN DURATION SUMMARY ==========\n")
     print(
-        summary.to_string(
+        summary[
+            [
+                "Index",
+                "Market",
+                "Symbols",
+                "Download Time",
+                "Processing Time",
+                "Total Time",
+            ]
+        ].to_string(
             index=False
         )
     )
+
+
+def build_profile_rows(
+    scan_timings,
+    mode,
+    workers,
+    export_time,
+    quality_time,
+    alert_time,
+    total_time,
+):
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    rows = []
+
+    for timing in scan_timings:
+        rows.append({
+            "RunTimestamp": timestamp,
+            "Mode": mode,
+            "Index": timing["Index"],
+            "Market": timing["Market"],
+            "Workers": workers,
+            "Symbols": timing["Symbols"],
+            "Download": timing["Download Time"],
+            "Indicators": timing["Indicator Time"],
+            "Decision": timing["Decision Time"],
+            "Processing": timing["Processing Time"],
+            "IndicatorCacheHits": timing["Indicator Cache Hits"],
+            "Export": 0.0,
+            "Quality": 0.0,
+            "Alerts": 0.0,
+            "Total": timing["Total Time"],
+        })
+
+    if scan_timings:
+        scan_df = pd.DataFrame(scan_timings)
+        rows.append({
+            "RunTimestamp": timestamp,
+            "Mode": mode,
+            "Index": "TOTAL",
+            "Market": "ALL",
+            "Workers": workers,
+            "Symbols": int(scan_df["Symbols"].sum()),
+            "Download": round(scan_df["Download Time"].sum(), 2),
+            "Indicators": round(scan_df["Indicator Time"].sum(), 2),
+            "Decision": round(scan_df["Decision Time"].sum(), 2),
+            "Processing": round(scan_df["Processing Time"].sum(), 2),
+            "IndicatorCacheHits": int(scan_df["Indicator Cache Hits"].sum()),
+            "Export": round(export_time, 2),
+            "Quality": round(quality_time, 2),
+            "Alerts": round(alert_time, 2),
+            "Total": round(total_time, 2),
+        })
+
+    return pd.DataFrame(rows)
+
+
+def save_profile_report(profile):
+
+    if profile.empty:
+        return
+
+    profile.to_csv(
+        PROFILE_FILE,
+        index=False,
+    )
+
+
+def show_performance_report(profile):
+
+    if profile.empty:
+        return
+
+    display = profile[
+        [
+            "Mode",
+            "Index",
+            "Market",
+            "Download",
+            "Indicators",
+            "Decision",
+            "Export",
+            "Quality",
+            "Alerts",
+            "Total",
+        ]
+    ]
+
+    print("\n========== PERFORMANCE REPORT ==========\n")
+    print(
+        display.to_string(
+            index=False,
+        )
+    )
+    print(f"\nSaved Scanner Profile: {PROFILE_FILE}")
 
 
 def main(force_refresh=False, mode="ALL", workers=MAX_WORKERS):
@@ -584,21 +764,34 @@ def main(force_refresh=False, mode="ALL", workers=MAX_WORKERS):
         ascending=False
     )
 
-    save_results(df)
+    export_time = save_results(df)
 
-    save_market_quality_summary(
+    quality_time = save_market_quality_summary(
         df,
         market_scan_seconds,
         datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     )
 
-    run_watchlist_alerts(df)
+    alert_time = run_watchlist_alerts(df)
 
     show_summary(df)
 
+    total_time = time.perf_counter() - total_start
+    profile = build_profile_rows(
+        scan_timings=scan_timings,
+        mode=mode,
+        workers=workers,
+        export_time=export_time,
+        quality_time=quality_time,
+        alert_time=alert_time,
+        total_time=total_time,
+    )
+    save_profile_report(profile)
+    show_performance_report(profile)
+
     show_scan_duration(
         scan_timings,
-        time.perf_counter() - total_start,
+        total_time,
     )
 
 

@@ -15,6 +15,7 @@ venv/
 
 work/
 data/price_cache/
+data/indicator_cache/
 output/*.csv
 output/*.xlsx
 data/strategy_history.csv
