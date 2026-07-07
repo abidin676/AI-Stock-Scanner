@@ -1,0 +1,99 @@
+{
+  "Presets": [
+    {
+      "Name": "Conservative",
+      "Description": "High quality setup with tight risk controls.",
+      "Version": "River Alpha Strategy Preset v1",
+      "CreatedDate": "2026-07-07 00:00:00",
+      "ModifiedDate": "2026-07-07 00:00:00",
+      "Author": "River Alpha",
+      "Parameters": {
+        "min_score": 90.0,
+        "enable_stop_loss": true,
+        "stop_loss_pct": 5.0,
+        "enable_target": true,
+        "target_pct": 15.0,
+        "enable_trailing_stop": true,
+        "trailing_stop_pct": 5.0,
+        "enable_max_holding_days": true,
+        "max_holding_days": 30
+      }
+    },
+    {
+      "Name": "Swing",
+      "Description": "Balanced swing trading preset.",
+      "Version": "River Alpha Strategy Preset v1",
+      "CreatedDate": "2026-07-07 00:00:00",
+      "ModifiedDate": "2026-07-07 00:00:00",
+      "Author": "River Alpha",
+      "Parameters": {
+        "min_score": 80.0,
+        "enable_stop_loss": true,
+        "stop_loss_pct": 8.0,
+        "enable_target": true,
+        "target_pct": 20.0,
+        "enable_trailing_stop": true,
+        "trailing_stop_pct": 10.0,
+        "enable_max_holding_days": true,
+        "max_holding_days": 60
+      }
+    },
+    {
+      "Name": "Momentum",
+      "Description": "Momentum continuation with wider exits.",
+      "Version": "River Alpha Strategy Preset v1",
+      "CreatedDate": "2026-07-07 00:00:00",
+      "ModifiedDate": "2026-07-07 00:00:00",
+      "Author": "River Alpha",
+      "Parameters": {
+        "min_score": 85.0,
+        "enable_stop_loss": true,
+        "stop_loss_pct": 10.0,
+        "enable_target": true,
+        "target_pct": 25.0,
+        "enable_trailing_stop": true,
+        "trailing_stop_pct": 12.0,
+        "enable_max_holding_days": true,
+        "max_holding_days": 45
+      }
+    },
+    {
+      "Name": "Breakout",
+      "Description": "Breakout-focused preset with defined follow-through.",
+      "Version": "River Alpha Strategy Preset v1",
+      "CreatedDate": "2026-07-07 00:00:00",
+      "ModifiedDate": "2026-07-07 00:00:00",
+      "Author": "River Alpha",
+      "Parameters": {
+        "min_score": 88.0,
+        "enable_stop_loss": true,
+        "stop_loss_pct": 7.0,
+        "enable_target": true,
+        "target_pct": 22.0,
+        "enable_trailing_stop": true,
+        "trailing_stop_pct": 10.0,
+        "enable_max_holding_days": true,
+        "max_holding_days": 30
+      }
+    },
+    {
+      "Name": "Position",
+      "Description": "Longer holding preset for position trades.",
+      "Version": "River Alpha Strategy Preset v1",
+      "CreatedDate": "2026-07-07 00:00:00",
+      "ModifiedDate": "2026-07-07 00:00:00",
+      "Author": "River Alpha",
+      "Parameters": {
+        "min_score": 75.0,
+        "enable_stop_loss": true,
+        "stop_loss_pct": 12.0,
+        "enable_target": true,
+        "target_pct": 35.0,
+        "enable_trailing_stop": true,
+        "trailing_stop_pct": 15.0,
+        "enable_max_holding_days": true,
+        "max_holding_days": 120
+      }
+    }
+  ]
+}

@@ -28,6 +28,21 @@ from strategy_history import (
     load_strategy_history,
     save_strategy_run,
 )
+from strategy_presets import (
+    DEFAULT_PARAMETERS,
+    DEFAULT_PRESET_FILE,
+    build_preset_performance_table,
+    compare_parameters,
+    delete_preset,
+    export_preset_json,
+    import_preset_json,
+    load_presets,
+    normalize_parameters,
+    parameters_from_optimizer_row,
+    reset_default_presets,
+    save_preset,
+    validate_parameters,
+)
 
 
 try:
@@ -144,6 +159,336 @@ COMPARISON_PERCENT_METRICS = {
     "Average Return",
 }
 OPTIMIZER_RANGE_HELP = "Use 0 to disable optional exit rules for that parameter."
+STRATEGY_LAB_PARAM_KEYS = {
+    "min_score": "strategy_lab_min_score",
+    "enable_stop_loss": "strategy_lab_enable_stop_loss",
+    "stop_loss_pct": "strategy_lab_stop_loss_pct",
+    "enable_target": "strategy_lab_enable_target",
+    "target_pct": "strategy_lab_target_pct",
+    "enable_trailing_stop": "strategy_lab_enable_trailing_stop",
+    "trailing_stop_pct": "strategy_lab_trailing_stop_pct",
+    "enable_max_holding_days": "strategy_lab_enable_max_holding_days",
+    "max_holding_days": "strategy_lab_max_holding_days",
+}
+
+
+def ensure_strategy_lab_defaults():
+
+    for parameter, key in STRATEGY_LAB_PARAM_KEYS.items():
+        st.session_state.setdefault(
+            key,
+            DEFAULT_PARAMETERS[parameter],
+        )
+
+    st.session_state.setdefault(
+        "strategy_lab_market",
+        "SET",
+    )
+    st.session_state.setdefault(
+        "strategy_lab_symbol",
+        "YONG",
+    )
+
+
+def strategy_lab_parameters_from_state():
+
+    return normalize_parameters({
+        parameter: st.session_state.get(
+            key,
+            DEFAULT_PARAMETERS[parameter],
+        )
+        for parameter, key in STRATEGY_LAB_PARAM_KEYS.items()
+    })
+
+
+def strategy_lab_parameters_from_values(
+    min_score,
+    enable_stop_loss,
+    stop_loss_pct,
+    enable_target,
+    target_pct,
+    enable_max_holding_days,
+    max_holding_days,
+    enable_trailing_stop,
+    trailing_stop_pct,
+):
+
+    return normalize_parameters({
+        "min_score": min_score,
+        "enable_stop_loss": enable_stop_loss,
+        "stop_loss_pct": stop_loss_pct,
+        "enable_target": enable_target,
+        "target_pct": target_pct,
+        "enable_max_holding_days": enable_max_holding_days,
+        "max_holding_days": max_holding_days,
+        "enable_trailing_stop": enable_trailing_stop,
+        "trailing_stop_pct": trailing_stop_pct,
+    })
+
+
+def apply_preset_to_state(preset):
+
+    parameters = normalize_parameters(
+        preset.get(
+            "Parameters",
+            {},
+        )
+    )
+
+    for parameter, key in STRATEGY_LAB_PARAM_KEYS.items():
+        st.session_state[key] = parameters[parameter]
+
+
+def load_optimizer_results():
+
+    if not OPTIMIZER_FILE.exists():
+        return pd.DataFrame()
+
+    try:
+        return pd.read_csv(OPTIMIZER_FILE)
+    except Exception:
+        return pd.DataFrame()
+
+
+def render_preset_badges(presets):
+
+    if not presets:
+        return
+
+    history = load_strategy_history()
+    optimizer_results = load_optimizer_results()
+    performance = build_preset_performance_table(
+        presets,
+        history,
+        optimizer_results,
+    )
+
+    st.subheader("Performance Badges")
+    st.caption(
+        "Badges are calculated from matching Strategy History first, then "
+        "Optimizer Results if no matching history exists."
+    )
+
+    for start in range(0, len(performance), 3):
+        columns = st.columns(3)
+
+        for column, (_, row) in zip(
+            columns,
+            performance.iloc[start:start + 3].iterrows(),
+        ):
+            with column:
+                with st.container(border=True):
+                    st.markdown(f"**{row['Preset']}**")
+                    st.markdown(str(row["Stars"]))
+
+                    if row["Trades"]:
+                        st.caption(
+                            f"Win Rate {safe_float(row['WinRate']):,.2f}%"
+                        )
+                        st.caption(
+                            f"PF {safe_float(row['ProfitFactor']):,.2f}"
+                        )
+                        st.caption(
+                            f"{row['Source']} | "
+                            f"{int(row['Runs'])} runs | "
+                            f"{int(row['Trades'])} trades"
+                        )
+                    else:
+                        st.caption("No matching backtest data yet")
+
+
+def render_preset_actions(presets, selected_preset):
+
+    current_parameters = strategy_lab_parameters_from_state()
+    save_name = st.text_input(
+        "Preset Name",
+        value="My Breakout",
+        key="strategy_preset_save_name",
+    )
+    save_description = st.text_area(
+        "Description",
+        value="Custom Strategy Lab preset",
+        key="strategy_preset_save_description",
+        height=80,
+    )
+    save_author = st.text_input(
+        "Author",
+        value="Natja",
+        key="strategy_preset_author",
+    )
+    b1, b2, b3, b4, b5 = st.columns(5)
+
+    with b1:
+        if st.button("Load", key="strategy_preset_load"):
+            apply_preset_to_state(selected_preset)
+            st.success(f"Loaded {selected_preset['Name']}")
+            st.rerun()
+
+    with b2:
+        if st.button("Save As New", key="strategy_preset_save_new"):
+            errors = validate_parameters(current_parameters)
+
+            if not save_name.strip():
+                st.error("Preset Name is required.")
+            elif errors:
+                st.error(" ".join(errors))
+            else:
+                path = save_preset(
+                    name=save_name,
+                    description=save_description,
+                    author=save_author,
+                    parameters=current_parameters,
+                )
+                st.success(f"Saved preset: {path}")
+                st.rerun()
+
+    with b3:
+        if st.button("Update Current", key="strategy_preset_update"):
+            errors = validate_parameters(current_parameters)
+
+            if errors:
+                st.error(" ".join(errors))
+            else:
+                path = save_preset(
+                    name=selected_preset["Name"],
+                    description=selected_preset.get(
+                        "Description",
+                        "",
+                    ),
+                    author=selected_preset.get(
+                        "Author",
+                        save_author,
+                    ),
+                    parameters=current_parameters,
+                    version=selected_preset.get("Version"),
+                )
+                st.success(f"Updated preset: {path}")
+                st.rerun()
+
+    with b4:
+        if st.button("Delete", key="strategy_preset_delete"):
+            deleted, message = delete_preset(
+                selected_preset["Name"]
+            )
+
+            if deleted:
+                st.success(message)
+                st.rerun()
+            else:
+                st.error(message)
+
+    with b5:
+        if st.button("Reset", key="strategy_preset_reset"):
+            reset_default_presets()
+            st.success("Default presets reset.")
+            st.rerun()
+
+    export_name = f"{selected_preset['Name']}.json"
+    st.download_button(
+        "Export preset JSON",
+        data=export_preset_json(selected_preset),
+        file_name=export_name,
+        mime="application/json",
+        key="strategy_preset_export",
+    )
+    uploaded = st.file_uploader(
+        "Import preset JSON",
+        type=[
+            "json",
+        ],
+        key="strategy_preset_import_file",
+    )
+
+    if uploaded and st.button("Import Preset", key="strategy_preset_import"):
+        try:
+            paths = import_preset_json(
+                uploaded.getvalue().decode("utf-8")
+            )
+            st.success(f"Imported {len(paths)} preset file(s).")
+            st.rerun()
+        except Exception as error:
+            st.error(f"Import failed: {error}")
+
+
+def render_preset_section():
+
+    ensure_strategy_lab_defaults()
+    presets = load_presets()
+
+    st.header("Strategy Presets")
+    st.caption(f"Preset folder: {DEFAULT_PRESET_FILE.parent}")
+
+    if not presets:
+        st.warning("No presets found.")
+        return presets
+
+    names = list(presets.keys())
+    selected_name = st.selectbox(
+        "Preset",
+        names,
+        key="strategy_preset_selected",
+    )
+    selected_preset = presets[selected_name]
+    previous_name = st.session_state.get(
+        "_strategy_preset_last_selected"
+    )
+
+    if previous_name != selected_name:
+        apply_preset_to_state(selected_preset)
+        st.session_state["_strategy_preset_last_selected"] = selected_name
+
+    render_preset_badges(presets)
+
+    with st.expander("Preset Manager", expanded=True):
+        st.write(selected_preset.get("Description", ""))
+        render_preset_actions(
+            presets,
+            selected_preset,
+        )
+
+    return presets
+
+
+def render_preset_comparison(current_parameters, presets):
+
+    if not presets:
+        return
+
+    st.subheader("Current vs Preset")
+    compare_name = st.selectbox(
+        "Compare Preset",
+        list(presets.keys()),
+        key="strategy_preset_compare_name",
+    )
+    comparison = compare_parameters(
+        current_parameters,
+        presets[compare_name].get(
+            "Parameters",
+            {},
+        ),
+    )
+
+    def highlight_changes(row):
+
+        if row.get("Changed"):
+            return [
+                "background-color: #78350f; color: #fef3c7;"
+                for _ in row
+            ]
+
+        return [
+            ""
+            for _ in row
+        ]
+
+    st.dataframe(
+        comparison.style.apply(
+            highlight_changes,
+            axis=1,
+        ),
+        use_container_width=True,
+        hide_index=True,
+    )
 
 
 def available_columns(df, columns):
@@ -1213,6 +1558,55 @@ def render_optimizer_results(results):
         hide_index=True,
     )
 
+    best = results.iloc[0]
+    best_parameters = parameters_from_optimizer_row(best)
+
+    with st.expander("Save Best Result as Preset"):
+        default_name = (
+            "Optimizer "
+            f"PF {safe_float(best.get('ProfitFactor')):,.2f} "
+            f"Return {safe_float(best.get('TotalReturnPct')):,.2f}%"
+        )
+        preset_name = st.text_input(
+            "Preset Name",
+            value=default_name,
+            key="optimizer_best_preset_name",
+        )
+        preset_description = st.text_area(
+            "Description",
+            value=(
+                "Created from the best Strategy Optimizer result. "
+                f"Win Rate {safe_float(best.get('WinRate')):,.2f}%, "
+                f"PF {safe_float(best.get('ProfitFactor')):,.2f}."
+            ),
+            key="optimizer_best_preset_description",
+            height=80,
+        )
+        preset_author = st.text_input(
+            "Author",
+            value="Natja",
+            key="optimizer_best_preset_author",
+        )
+
+        if st.button(
+            "Save Best Result as Preset",
+            key="optimizer_save_best_preset",
+        ):
+            errors = validate_parameters(best_parameters)
+
+            if not preset_name.strip():
+                st.error("Preset Name is required.")
+            elif errors:
+                st.error(" ".join(errors))
+            else:
+                path = save_preset(
+                    name=preset_name,
+                    description=preset_description,
+                    author=preset_author,
+                    parameters=best_parameters,
+                )
+                st.success(f"Saved preset: {path}")
+
 
 def render_optimizer_section():
 
@@ -1420,7 +1814,7 @@ def backtest_page():
 
     st.title("Strategy Lab")
     st.caption(
-        "Phase 2.3: Performance analytics build on Strategy Lab outputs "
+        "v1.1.2: Strategy Presets save and apply Strategy Lab parameters "
         "without changing the trading logic."
     )
     st.caption(
@@ -1431,6 +1825,7 @@ def backtest_page():
 
     today = date.today()
     default_start = today - timedelta(days=365)
+    presets = render_preset_section()
 
     with st.form("strategy_lab_form"):
         c1, c2, c3 = st.columns(3)
@@ -1442,22 +1837,23 @@ def backtest_page():
                     "SET",
                     "USA",
                 ],
+                key="strategy_lab_market",
             )
             symbol = st.text_input(
                 "Symbol",
-                value="YONG"
-                if market == "SET"
-                else "AEP",
+                key="strategy_lab_symbol",
             )
 
         with c2:
             start_date = st.date_input(
                 "Start Date",
                 value=default_start,
+                key="strategy_lab_start_date",
             )
             end_date = st.date_input(
                 "End Date",
                 value=today,
+                key="strategy_lab_end_date",
             )
 
         with c3:
@@ -1465,8 +1861,8 @@ def backtest_page():
                 "Min Score",
                 min_value=0.0,
                 max_value=100.0,
-                value=70.0,
                 step=1.0,
+                key="strategy_lab_min_score",
             )
 
         st.subheader("Exit Rules")
@@ -1480,49 +1876,49 @@ def backtest_page():
         with r1:
             enable_stop_loss = st.checkbox(
                 "Stop Loss",
-                value=False,
+                key="strategy_lab_enable_stop_loss",
             )
             stop_loss_pct = st.number_input(
                 "Stop Loss %",
-                min_value=0.1,
-                value=8.0,
+                min_value=0.0,
                 step=0.5,
+                key="strategy_lab_stop_loss_pct",
             )
 
         with r2:
             enable_target = st.checkbox(
                 "Target",
-                value=False,
+                key="strategy_lab_enable_target",
             )
             target_pct = st.number_input(
                 "Target %",
-                min_value=0.1,
-                value=20.0,
+                min_value=0.0,
                 step=0.5,
+                key="strategy_lab_target_pct",
             )
 
         with r3:
             enable_max_holding_days = st.checkbox(
                 "Max Holding Days",
-                value=False,
+                key="strategy_lab_enable_max_holding_days",
             )
             max_holding_days = st.number_input(
                 "Max Days",
-                min_value=1,
-                value=20,
+                min_value=0,
                 step=1,
+                key="strategy_lab_max_holding_days",
             )
 
         with r4:
             enable_trailing_stop = st.checkbox(
                 "Trailing Stop",
-                value=False,
+                key="strategy_lab_enable_trailing_stop",
             )
             trailing_stop_pct = st.number_input(
                 "Trailing Stop %",
-                min_value=0.1,
-                value=10.0,
+                min_value=0.0,
                 step=0.5,
+                key="strategy_lab_trailing_stop_pct",
             )
 
         benchmark_name = st.selectbox(
@@ -1536,11 +1932,31 @@ def backtest_page():
             "Run Strategy Lab"
         )
 
+    current_parameters = strategy_lab_parameters_from_values(
+        min_score,
+        enable_stop_loss,
+        stop_loss_pct,
+        enable_target,
+        target_pct,
+        enable_max_holding_days,
+        max_holding_days,
+        enable_trailing_stop,
+        trailing_stop_pct,
+    )
+    render_preset_comparison(
+        current_parameters,
+        presets,
+    )
+
     if submitted:
+        parameter_errors = validate_parameters(current_parameters)
+
         if not symbol.strip():
             st.error("Symbol is required")
         elif start_date >= end_date:
             st.error("Start Date must be before End Date")
+        elif parameter_errors:
+            st.error(" ".join(parameter_errors))
         else:
             with st.spinner("Running Strategy Lab..."):
                 trades, summary, equity_curve, monthly = run_strategy_lab(
