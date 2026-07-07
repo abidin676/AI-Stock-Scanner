@@ -1,2 +1,4 @@
-Symbol,Market,EntryDate,EntryPrice,Shares,Setup,Score,Status,ExitDate,ExitPrice
-MSFT,USA,2026-06-25,450.0,50,,,OPEN,,
+Symbol,Market,Currency,EntryDate,EntryPrice,Shares,Setup,Score,Status,ExitDate,ExitPrice,BuyAmount,BuyCommission,BuyVAT,BuyFee,NetCost,SellAmount,SellCommission,SellVAT,SellFee,NetProceeds,GrossPL,NetPL,NetPLPct
+AEP,USA,USD,2026-07-05,131.28,0.4975625,,0.0,OPEN,,0.0,65.320005,0.09,0.0063,0.0963,65.416305,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+YONG,SET,THB,2026-07-05,0.73,800.0,,0.0,OPEN,,0.0,584.0,0.91688,0.064182,0.981062,584.981062,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+EG,USA,USD,2026-07-05,341.14,0.1895116,,0.0,OPEN,,0.0,64.649987,0.09,0.0063,0.0963,64.746287,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
