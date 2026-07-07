@@ -775,9 +775,10 @@ def prepare_history(symbol, market, start_date, end_date):
     return df
 
 
-def run_strategy_lab(
+def run_strategy_lab_from_history(
     symbol,
     market,
+    history,
     start_date,
     end_date,
     min_score,
@@ -790,6 +791,7 @@ def run_strategy_lab(
     max_holding_days=0,
     enable_trailing_stop=False,
     trailing_stop_pct=0,
+    save_output=True,
 ):
 
     market = str(market).upper().strip()
@@ -806,24 +808,31 @@ def run_strategy_lab(
         enable_trailing_stop=enable_trailing_stop,
         trailing_stop_pct=trailing_stop_pct,
     )
-    df = prepare_history(
-        symbol,
-        market,
-        start,
-        end,
+    df = (
+        history.copy()
+        if history is not None
+        else pd.DataFrame()
     )
+
+    if not df.empty:
+        df["date"] = pd.to_datetime(
+            df["date"]
+        ).dt.tz_localize(None)
 
     if df.empty:
         trades = pd.DataFrame(columns=TRADE_COLUMNS)
         summary = calculate_summary(trades)
         equity_curve = build_equity_curve(trades)
         monthly = build_monthly_performance(trades)
-        save_results(
-            trades,
-            summary,
-            equity_curve,
-            monthly,
-        )
+
+        if save_output:
+            save_results(
+                trades,
+                summary,
+                equity_curve,
+                monthly,
+            )
+
         return trades, summary, equity_curve, monthly
 
     trades = []
@@ -919,14 +928,63 @@ def run_strategy_lab(
         trades_df,
         equity_curve,
     )
-    save_results(
-        trades_df,
-        summary,
-        equity_curve,
-        monthly,
-    )
+
+    if save_output:
+        save_results(
+            trades_df,
+            summary,
+            equity_curve,
+            monthly,
+        )
 
     return trades_df, summary, equity_curve, monthly
+
+
+def run_strategy_lab(
+    symbol,
+    market,
+    start_date,
+    end_date,
+    min_score,
+    exit_rules=None,
+    enable_stop_loss=False,
+    stop_loss_pct=0,
+    enable_target=False,
+    target_pct=0,
+    enable_max_holding_days=False,
+    max_holding_days=0,
+    enable_trailing_stop=False,
+    trailing_stop_pct=0,
+):
+
+    market = str(market).upper().strip()
+    start = pd.to_datetime(start_date)
+    end = pd.to_datetime(end_date)
+    df = prepare_history(
+        symbol,
+        market,
+        start,
+        end,
+    )
+
+    return run_strategy_lab_from_history(
+        symbol=symbol,
+        market=market,
+        history=df,
+        start_date=start,
+        end_date=end,
+        min_score=min_score,
+        exit_rules=exit_rules,
+        enable_stop_loss=enable_stop_loss,
+        stop_loss_pct=stop_loss_pct,
+        enable_target=enable_target,
+        target_pct=target_pct,
+        enable_max_holding_days=enable_max_holding_days,
+        max_holding_days=max_holding_days,
+        enable_trailing_stop=enable_trailing_stop,
+        trailing_stop_pct=trailing_stop_pct,
+        save_output=True,
+    )
 
 
 def run_backtest(

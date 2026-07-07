@@ -11,6 +11,13 @@ from backtest_engine import (
     TRADES_FILE,
     run_strategy_lab,
 )
+from strategy_optimizer import (
+    OPTIMIZER_COLUMNS,
+    OPTIMIZER_FILE,
+    build_parameter_range,
+    count_optimizer_combinations,
+    run_strategy_optimizer,
+)
 from strategy_history import (
     BENCHMARK_FILE,
     DEFAULT_VERSION,
@@ -136,6 +143,7 @@ COMPARISON_PERCENT_METRICS = {
     "Win Rate",
     "Average Return",
 }
+OPTIMIZER_RANGE_HELP = "Use 0 to disable optional exit rules for that parameter."
 
 
 def available_columns(df, columns):
@@ -1067,6 +1075,347 @@ def render_performance_dashboard(trades, summary, equity_curve, monthly):
         )
 
 
+def render_float_range(
+    label,
+    key_prefix,
+    start_default,
+    end_default,
+    step_default,
+    min_value=0.0,
+    max_value=100.0,
+):
+
+    st.markdown(f"**{label}**")
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+        start = st.number_input(
+            "From",
+            min_value=float(min_value),
+            max_value=float(max_value),
+            value=float(start_default),
+            step=0.5,
+            key=f"{key_prefix}_start",
+        )
+
+    with c2:
+        end = st.number_input(
+            "To",
+            min_value=float(min_value),
+            max_value=float(max_value),
+            value=float(end_default),
+            step=0.5,
+            key=f"{key_prefix}_end",
+        )
+
+    with c3:
+        step = st.number_input(
+            "Step",
+            min_value=0.1,
+            max_value=float(max_value),
+            value=float(step_default),
+            step=0.5,
+            key=f"{key_prefix}_step",
+        )
+
+    return start, end, step
+
+
+def render_int_range(
+    label,
+    key_prefix,
+    start_default,
+    end_default,
+    step_default,
+    min_value=0,
+    max_value=365,
+):
+
+    st.markdown(f"**{label}**")
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+        start = st.number_input(
+            "From",
+            min_value=int(min_value),
+            max_value=int(max_value),
+            value=int(start_default),
+            step=1,
+            key=f"{key_prefix}_start",
+        )
+
+    with c2:
+        end = st.number_input(
+            "To",
+            min_value=int(min_value),
+            max_value=int(max_value),
+            value=int(end_default),
+            step=1,
+            key=f"{key_prefix}_end",
+        )
+
+    with c3:
+        step = st.number_input(
+            "Step",
+            min_value=1,
+            max_value=int(max_value),
+            value=int(step_default),
+            step=1,
+            key=f"{key_prefix}_step",
+        )
+
+    return start, end, step
+
+
+def render_optimizer_results(results):
+
+    st.subheader("Optimizer Results")
+
+    if results.empty:
+        st.info("No optimizer results")
+        return
+
+    display = results[
+        available_columns(
+            results,
+            OPTIMIZER_COLUMNS,
+        )
+    ].copy()
+
+    def highlight_best_row(row):
+
+        if row.name == display.index[0]:
+            return [
+                "background-color: #14532d; color: #f8fafc;"
+                for _ in row
+            ]
+
+        return [
+            ""
+            for _ in row
+        ]
+
+    numeric_columns = {
+        column: "{:,.2f}"
+        for column in display.columns
+        if column != "TotalTrades"
+    }
+
+    styled = display.style.apply(
+        highlight_best_row,
+        axis=1,
+    ).format(
+        numeric_columns
+    )
+    st.dataframe(
+        styled,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+def render_optimizer_section():
+
+    st.header("Optimizer")
+    st.caption(
+        "Runs multiple Strategy Lab parameter combinations with the same "
+        "engine. Scanner, Watchlist, Portfolio and Decision Engine are not "
+        "changed."
+    )
+    st.caption(f"Optimizer output: {OPTIMIZER_FILE}")
+
+    today = date.today()
+    default_start = today - timedelta(days=365)
+    range_error = None
+    combination_count = 0
+    confirm_large = True
+
+    with st.form("strategy_optimizer_form"):
+        c1, c2, c3 = st.columns(3)
+
+        with c1:
+            market = st.selectbox(
+                "Market",
+                [
+                    "SET",
+                    "USA",
+                ],
+                key="optimizer_market",
+            )
+            symbol = st.text_input(
+                "Symbol",
+                value="YONG"
+                if market == "SET"
+                else "AEP",
+                key="optimizer_symbol",
+            )
+
+        with c2:
+            start_date = st.date_input(
+                "Start Date",
+                value=default_start,
+                key="optimizer_start_date",
+            )
+            end_date = st.date_input(
+                "End Date",
+                value=today,
+                key="optimizer_end_date",
+            )
+
+        with c3:
+            st.caption(OPTIMIZER_RANGE_HELP)
+
+        r1, r2 = st.columns(2)
+
+        with r1:
+            min_score_range = render_float_range(
+                "Min Score",
+                "optimizer_min_score",
+                70.0,
+                90.0,
+                5.0,
+                0.0,
+                100.0,
+            )
+            stop_loss_range = render_float_range(
+                "Stop Loss %",
+                "optimizer_stop_loss",
+                3.0,
+                10.0,
+                1.0,
+                0.0,
+                100.0,
+            )
+            target_range = render_float_range(
+                "Target %",
+                "optimizer_target",
+                10.0,
+                30.0,
+                5.0,
+                0.0,
+                300.0,
+            )
+
+        with r2:
+            max_holding_range = render_int_range(
+                "Max Holding Days",
+                "optimizer_max_holding",
+                0,
+                20,
+                10,
+                0,
+                365,
+            )
+            trailing_stop_range = render_float_range(
+                "Trailing Stop %",
+                "optimizer_trailing_stop",
+                0.0,
+                10.0,
+                5.0,
+                0.0,
+                100.0,
+            )
+
+        try:
+            min_scores = build_parameter_range(*min_score_range)
+            stop_losses = build_parameter_range(*stop_loss_range)
+            targets = build_parameter_range(*target_range)
+            max_holding_days = build_parameter_range(
+                *max_holding_range,
+                as_int=True,
+            )
+            trailing_stops = build_parameter_range(*trailing_stop_range)
+            combination_count = count_optimizer_combinations(
+                min_scores,
+                stop_losses,
+                targets,
+                max_holding_days,
+                trailing_stops,
+            )
+        except ValueError as error:
+            min_scores = []
+            stop_losses = []
+            targets = []
+            max_holding_days = []
+            trailing_stops = []
+            range_error = str(error)
+
+        st.caption(f"Combinations: {combination_count}")
+
+        if combination_count > 200:
+            st.warning(
+                "This will run more than 200 combinations and may take a while."
+            )
+            confirm_large = st.checkbox(
+                "Confirm large optimization",
+                value=False,
+                key="optimizer_confirm_large",
+            )
+
+        submitted = st.form_submit_button(
+            "Run Optimizer"
+        )
+
+    if submitted:
+        if range_error:
+            st.error(range_error)
+        elif not symbol.strip():
+            st.error("Symbol is required")
+        elif start_date >= end_date:
+            st.error("Start Date must be before End Date")
+        elif combination_count > 200 and not confirm_large:
+            st.error(
+                "Please confirm before running more than 200 combinations."
+            )
+        else:
+            progress_bar = st.progress(0)
+            status = st.empty()
+
+            def update_progress(current, total, row):
+
+                progress_bar.progress(
+                    current / total
+                    if total
+                    else 0
+                )
+                status.write(
+                    f"Running {current}/{total} | "
+                    f"ProfitFactor {safe_float(row.get('ProfitFactor')):,.2f} | "
+                    f"Return {safe_float(row.get('TotalReturnPct')):,.2f}%"
+                )
+
+            try:
+                with st.spinner("Running Optimizer..."):
+                    results = run_strategy_optimizer(
+                        symbol=symbol,
+                        market=market,
+                        start_date=start_date,
+                        end_date=end_date,
+                        min_scores=min_scores,
+                        stop_loss_pcts=stop_losses,
+                        target_pcts=targets,
+                        max_holding_days=max_holding_days,
+                        trailing_stop_pcts=trailing_stops,
+                        progress_callback=update_progress,
+                    )
+
+                progress_bar.progress(1.0)
+                status.write("Optimizer completed")
+                st.success(
+                    f"Optimizer completed. Saved {len(results)} rows."
+                )
+                render_optimizer_results(results)
+            except Exception as error:
+                st.error(f"Optimizer failed: {error}")
+
+    if not submitted and OPTIMIZER_FILE.exists():
+        try:
+            existing = pd.read_csv(OPTIMIZER_FILE)
+            render_optimizer_results(existing)
+        except Exception as error:
+            st.warning(f"Could not load optimizer results: {error}")
+
+
 def backtest_page():
 
     st.title("Strategy Lab")
@@ -1260,6 +1609,9 @@ def backtest_page():
                 equity_curve,
                 start_date,
             )
+
+    st.divider()
+    render_optimizer_section()
 
     st.divider()
     render_strategy_history_dashboard()
