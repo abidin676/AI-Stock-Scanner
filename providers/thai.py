@@ -1,35 +1,43 @@
-"""
-Thai Stock Provider
-อ่านรายชื่อหุ้นจาก watchlists/
-"""
-
 from pathlib import Path
 
-# โฟลเดอร์ watchlists อยู่ระดับเดียวกับ providers
-BASE = Path(__file__).parent.parent / "watchlists"
+
+BASES = [
+    Path(__file__).parent.parent / "watchlists",
+    Path(__file__).parent / "lists",
+]
 
 
 def load_list(filename: str):
-    path = BASE / filename
 
-    if not path.exists():
-        raise FileNotFoundError(f"{path} not found")
+    path = None
 
-    with open(path, "r", encoding="utf-8") as f:
+    for base in BASES:
+        candidate = base / filename
+
+        if candidate.exists() and candidate.stat().st_size > 0:
+            path = candidate
+            break
+
+    if path is None:
+        raise FileNotFoundError(f"{filename} not found")
+
+    with open(path, "r", encoding="utf-8") as file:
         return [
             line.strip().upper()
-            for line in f
+            for line in file
             if line.strip()
         ]
 
 
-def get_symbols(index="SET100"):
+def get_symbols(index="SET"):
 
-    index = index.upper()
+    index = index.upper().replace("_", " ")
 
     mapping = {
         "SET": "set.txt",
-       
+        "SET ALL": "set.txt",
+        "SET50": "set50.txt",
+        "SET100": "set100.txt",
     }
 
     if index not in mapping:

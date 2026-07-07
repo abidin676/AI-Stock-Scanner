@@ -1,34 +1,72 @@
 from pathlib import Path
 
-# โฟลเดอร์ watchlists อยู่ระดับเดียวกับ providers
-BASE = Path(__file__).parent.parent / "watchlists"
+
+BASES = [
+    Path(__file__).parent.parent / "watchlists",
+    Path(__file__).parent / "lists",
+]
 
 
 def load_list(filename):
-    path = BASE / filename
 
-    if not path.exists():
-        raise FileNotFoundError(f"Watchlist not found: {path}")
+    path = None
 
-    with open(path, "r", encoding="utf-8") as f:
+    for base in BASES:
+        candidate = base / filename
+
+        if candidate.exists() and candidate.stat().st_size > 0:
+            path = candidate
+            break
+
+    if path is None:
+        raise FileNotFoundError(f"Watchlist not found: {filename}")
+
+    with open(path, "r", encoding="utf-8") as file:
         return [
             line.strip().upper()
-            for line in f
+            for line in file
             if line.strip()
         ]
 
 
+def dedupe(symbols):
+
+    seen = set()
+    result = []
+
+    for symbol in symbols:
+        if symbol in seen:
+            continue
+
+        seen.add(symbol)
+        result.append(symbol)
+
+    return result
+
+
 def get_symbols(index="US100"):
 
+    index = index.upper().replace("_", " ")
     mapping = {
         "US100": "us100.txt",
         "SP500": "sp500.txt",
         "DOW30": "dow30.txt",
-        
-        
+        "USA WATCHLIST": "current.txt",
     }
 
-    index = index.upper()
+    if index == "USA ALL":
+        symbols = []
+
+        for filename in (
+            "us100.txt",
+            "sp500.txt",
+            "dow30.txt",
+        ):
+            symbols.extend(
+                load_list(filename)
+            )
+
+        return dedupe(symbols)
 
     if index not in mapping:
         raise ValueError(f"Unknown index: {index}")

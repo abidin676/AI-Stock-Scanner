@@ -1,11 +1,14 @@
 import os
 import time
+import argparse
+import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from collections import defaultdict
 import pandas as pd
 
 from providers.thai import get_symbols
-from data import get_history
+from data import get_histories
 from indicators import add_indicators
 from strategy import trend_start
 from providers.usa import get_symbols as get_us_symbols
@@ -15,7 +18,9 @@ from market_quality import (
     save_market_quality,
 )
 from config import (
-    SCAN_MARKETS,
+    PERIOD,
+    INTERVAL,
+    MAX_WORKERS,
     OUTPUT_FOLDER,
     CSV_FILE,
     EXCEL_FILE,
@@ -26,6 +31,11 @@ from config import (
 OUTPUT_DIR = OUTPUT_FOLDER
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 BREAKDOWN_ENGINES = (
     "Trend",
     "Momentum",
@@ -35,6 +45,35 @@ BREAKDOWN_ENGINES = (
     "Price",
     "Stage",
 )
+SCAN_MODE_PLANS = {
+    "ALL": [
+        ("SET", "SET"),
+        ("USA ALL", "USA"),
+    ],
+    "SET50": [
+        ("SET50", "SET"),
+    ],
+    "SET100": [
+        ("SET100", "SET"),
+    ],
+    "SET ALL": [
+        ("SET", "SET"),
+    ],
+    "USA WATCHLIST": [
+        ("USA WATCHLIST", "USA"),
+    ],
+    "USA ALL": [
+        ("USA ALL", "USA"),
+    ],
+}
+SCAN_MODE_CHOICES = [
+    "ALL",
+    "SET50",
+    "SET100",
+    "SET All",
+    "USA Watchlist",
+    "USA All",
+]
 
 
 def is_buy_candidate(signal):
@@ -78,63 +117,218 @@ def print_score_breakdown(symbol, result):
     print()
 
 
-def scan_market(index="SET", market="SET"):
+def normalize_scan_mode(mode):
+
+    return str(mode or "ALL").upper().replace("_", " ").strip()
+
+
+def resolve_scan_plan(mode="ALL"):
+
+    key = normalize_scan_mode(mode)
+
+    if key not in SCAN_MODE_PLANS:
+        raise ValueError(f"Unknown scan mode: {mode}")
+
+    return SCAN_MODE_PLANS[key]
+
+
+def dedupe_symbols(symbols):
+
+    seen = set()
+    result = []
+
+    for symbol in symbols:
+        symbol = str(symbol).upper().strip()
+
+        if not symbol or symbol in seen:
+            continue
+
+        seen.add(symbol)
+        result.append(symbol)
+
+    return result
+
+
+def load_symbols(index, market):
 
     market = (market or "SET").upper()
 
     if market.upper() == "SET":
-        symbols = get_symbols(index)
+        return get_symbols(index)
 
-    elif market.upper() == "USA":
-        symbols = get_us_symbols(index)
+    if market.upper() == "USA":
+        return get_us_symbols(index)
 
-    else:
-        raise ValueError(f"Unknown market: {market}")
+    raise ValueError(f"Unknown market: {market}")
+
+
+def process_symbol(symbol, market, df):
+
+    if df.empty:
+        return {
+            "symbol": symbol,
+            "row": None,
+            "decision": None,
+            "error": None,
+            "message": "No Data",
+        }
+
+    df = add_indicators(df)
+    result = trend_start(
+        df,
+        market=market,
+    )
+
+    return {
+        "symbol": symbol,
+        "row": {
+            "Symbol": symbol,
+            "Market": market,
+            "Signal": result["signal"],
+            "Setup": result["setup"],
+            "Score": result["score"],
+            "Price": result["price"],
+            "RSI": result["rsi"],
+            "RVOL": result["rvol"],
+            "Reasons": ", ".join(result["reasons"])
+        },
+        "decision": result,
+        "error": None,
+        "message": (
+            f"{result['signal']} | "
+            f"Score {result['score']}"
+        ),
+    }
+
+
+def scan_market(
+    index="SET",
+    market="SET",
+    force_refresh=False,
+    workers=MAX_WORKERS,
+):
+
+    market = (market or "SET").upper()
+    symbols = dedupe_symbols(
+        load_symbols(
+            index,
+            market,
+        )
+    )
 
     results = []
+    total_start = time.perf_counter()
 
     print(f"\n========== SCANNING {index} ==========\n")
     print(f"Total Symbols : {len(symbols)}\n")
+    print(f"Workers       : {workers}\n")
 
-    for i, symbol in enumerate(symbols, start=1):
+    download_start = time.perf_counter()
+    histories = get_histories(
+        symbols,
+        market=market,
+        period=PERIOD,
+        interval=INTERVAL,
+        force_refresh=force_refresh,
+    )
+    download_time = time.perf_counter() - download_start
 
-        print(f"[{i}/{len(symbols)}] {symbol}")
+    processing_start = time.perf_counter()
+    max_workers = max(
+        1,
+        int(workers or MAX_WORKERS),
+    )
 
-        try:
-            df = get_history(symbol, market)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_map = {
+            executor.submit(
+                process_symbol,
+                symbol,
+                market,
+                histories.get(symbol, pd.DataFrame()),
+            ): symbol
+            for symbol in symbols
+        }
 
-            if df.empty:
-                print("   No Data")
+        for i, future in enumerate(
+            as_completed(future_map),
+            start=1,
+        ):
+            symbol = future_map[future]
+            print(f"[{i}/{len(symbols)}] {symbol}")
+
+            try:
+                payload = future.result()
+            except Exception as e:
+                print(f"   ERROR : {e}")
                 continue
 
-            df = add_indicators(df)
-            result = trend_start(
-                df,
-                market=market,
-            )
+            if payload["message"]:
+                print(f"   {payload['message']}")
 
-            results.append({
-                "Symbol": symbol,
-                "Market": market,
-                "Signal": result["signal"],
-                "Setup": result["setup"],
-                "Score": result["score"],
-                "Price": result["price"],
-                "RSI": result["rsi"],
-                "RVOL": result["rvol"],
-                "Reasons": ", ".join(result["reasons"])
-            })
+            if payload["row"] is not None:
+                results.append(payload["row"])
 
-            print(
-                f"   {result['signal']} | "
-                f"Score {result['score']}"
-            )
+            decision = payload.get("decision")
 
-            if is_buy_candidate(result["signal"]):
+            if decision and is_buy_candidate(decision["signal"]):
                 print_score_breakdown(
                     symbol,
-                    result,
+                    decision,
                 )
+
+    processing_time = time.perf_counter() - processing_start
+    total_time = time.perf_counter() - total_start
+    timing = {
+        "Index": index,
+        "Market": market,
+        "Symbols": len(symbols),
+        "Download Time": round(download_time, 2),
+        "Processing Time": round(processing_time, 2),
+        "Total Time": round(total_time, 2),
+    }
+
+    print("\nSCAN DURATION")
+    print(
+        pd.DataFrame([timing]).to_string(
+            index=False
+        )
+    )
+
+    return pd.DataFrame(results), timing
+
+
+def scan_market_legacy(index="SET", market="SET", force_refresh=False):
+
+    symbols = dedupe_symbols(
+        load_symbols(
+            index,
+            market,
+        )
+    )
+    results = []
+
+    for symbol in symbols:
+        try:
+            histories = get_histories(
+                [
+                    symbol,
+                ],
+                market=market,
+                period=PERIOD,
+                interval=INTERVAL,
+                force_refresh=force_refresh,
+            )
+            payload = process_symbol(
+                symbol,
+                market,
+                histories.get(symbol, pd.DataFrame()),
+            )
+
+            if payload["row"] is None:
+                continue
+
+            results.append(payload["row"])
 
         except Exception as e:
             print(f"   ERROR : {e}")
@@ -296,23 +490,63 @@ def save_market_quality_summary(
     print(f"\nSaved Market Quality: {output_path}")
 
 
-def main():
+def show_scan_duration(scan_timings, total_time):
+
+    if not scan_timings:
+        return
+
+    summary = pd.DataFrame(scan_timings)
+    total_download = summary["Download Time"].sum()
+    total_processing = summary["Processing Time"].sum()
+    total_row = {
+        "Index": "TOTAL",
+        "Market": "ALL",
+        "Symbols": int(summary["Symbols"].sum()),
+        "Download Time": round(total_download, 2),
+        "Processing Time": round(total_processing, 2),
+        "Total Time": round(total_time, 2),
+    }
+    summary = pd.concat(
+        [
+            summary,
+            pd.DataFrame([total_row]),
+        ],
+        ignore_index=True,
+    )
+
+    print("\n========== SCAN DURATION SUMMARY ==========\n")
+    print(
+        summary.to_string(
+            index=False
+        )
+    )
+
+
+def main(force_refresh=False, mode="ALL", workers=MAX_WORKERS):
 
     all_results = []
     market_scan_seconds = defaultdict(float)
+    scan_timings = []
+    total_start = time.perf_counter()
+    scan_plan = resolve_scan_plan(mode)
 
-    for index, market in SCAN_MARKETS:
+    if force_refresh:
+        print("\nPRICE CACHE : Force refresh enabled\n")
 
-        scan_start = time.perf_counter()
+    print(f"\nSCAN MODE   : {mode}")
+    print(f"MAX WORKERS : {workers}\n")
 
-        df = scan_market(
+    for index, market in scan_plan:
+
+        df, timing = scan_market(
             index=index,
-            market=market
+            market=market,
+            force_refresh=force_refresh,
+            workers=workers,
         )
 
-        market_scan_seconds[market.upper()] += (
-            time.perf_counter() - scan_start
-        )
+        market_scan_seconds[market.upper()] += timing["Total Time"]
+        scan_timings.append(timing)
 
         all_results.append(df)
 
@@ -362,6 +596,39 @@ def main():
 
     show_summary(df)
 
+    show_scan_duration(
+        scan_timings,
+        time.perf_counter() - total_start,
+    )
+
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(
+        description="Run River Alpha Scanner"
+    )
+    parser.add_argument(
+        "--force-refresh",
+        action="store_true",
+        help="Ignore today's price cache and download fresh prices.",
+    )
+    parser.add_argument(
+        "--mode",
+        default="ALL",
+        help=(
+            "Scan mode: ALL, SET50, SET100, SET All, "
+            "USA Watchlist, USA All."
+        ),
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=MAX_WORKERS,
+        help="Parallel worker count for indicator and decision processing.",
+    )
+    args = parser.parse_args()
+
+    main(
+        force_refresh=args.force_refresh,
+        mode=args.mode,
+        workers=args.workers,
+    )

@@ -1,10 +1,14 @@
 from pathlib import Path
 from datetime import datetime
 import html
+import subprocess
+import sys
 
 import pandas as pd
 import streamlit as st
 
+from config import MAX_WORKERS
+from data import PRICE_CACHE_DIR
 from market_quality import (
     calculate_market_quality,
     latest_market_quality_with_trend,
@@ -14,6 +18,15 @@ from watchlist import add_to_watchlist
 
 
 RESULT_FILE = Path("output") / "scanner_results.xlsx"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SCAN_MODE_OPTIONS = [
+    "ALL",
+    "SET50",
+    "SET100",
+    "SET All",
+    "USA Watchlist",
+    "USA All",
+]
 SIGNAL_ORDER = {
     "BUY": 0,
     "WATCH": 1,
@@ -557,13 +570,93 @@ def render_add_to_watchlist(df):
     st.success(f"Added {row['Symbol']} to Watchlist")
 
 
+def run_scanner_from_dashboard(force_refresh, mode, workers):
+
+    command = [
+        sys.executable,
+        "scanner.py",
+        "--mode",
+        mode,
+        "--workers",
+        str(workers),
+    ]
+
+    if force_refresh:
+        command.append("--force-refresh")
+
+    return subprocess.run(
+        command,
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+
+def render_scanner_actions():
+
+    st.sidebar.header("Scanner")
+    st.sidebar.caption(f"Price cache: {PRICE_CACHE_DIR}")
+    scan_mode = st.sidebar.selectbox(
+        "Scan Mode",
+        SCAN_MODE_OPTIONS,
+        key="scanner_scan_mode",
+    )
+    workers = st.sidebar.number_input(
+        "Workers",
+        min_value=1,
+        max_value=32,
+        value=int(MAX_WORKERS),
+        step=1,
+        key="scanner_workers",
+    )
+    run_clicked = st.sidebar.button(
+        "Run Scanner"
+    )
+    force_clicked = st.sidebar.button(
+        "Force Refresh"
+    )
+
+    if not run_clicked and not force_clicked:
+        return
+
+    with st.spinner(
+        "Running scanner..."
+    ):
+        result = run_scanner_from_dashboard(
+            force_refresh=force_clicked,
+            mode=scan_mode,
+            workers=workers,
+        )
+
+    output = (
+        (result.stdout or "")
+        + "\n"
+        + (result.stderr or "")
+    ).strip()
+
+    if result.returncode == 0:
+        st.success("Scanner completed.")
+    else:
+        st.error(
+            f"Scanner failed with exit code {result.returncode}."
+        )
+
+    if output:
+        with st.expander("Scanner Output"):
+            st.code(
+                output[-12000:],
+                language="text",
+            )
+
+
 def scanner_page():
 
     st.title("River Alpha Scanner")
+    render_scanner_actions()
 
     if not RESULT_FILE.exists():
         st.error("scanner_results.xlsx not found")
-        st.info("Run: python scanner.py")
+        st.info("Run: python scanner.py or use Force Refresh")
         return
 
     df = pd.read_excel(RESULT_FILE)

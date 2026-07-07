@@ -94,6 +94,16 @@ def safe_numeric(series):
     ).fillna(0)
 
 
+def count_true(series):
+
+    if series.empty:
+        return 0
+
+    return int(
+        series.fillna(False).astype(bool).sum()
+    )
+
+
 def normalize_scan_seconds(scan_time_seconds):
 
     if not scan_time_seconds:
@@ -170,50 +180,50 @@ def calculate_market_quality(
         buy_mask = data["Signal"].apply(
             is_buy_signal
         )
-        buy_count = int(
-            buy_mask.sum()
+        buy_count = count_true(
+            buy_mask
         )
-        watch_count = int(
+        watch_count = count_true(
             signal_contains(
                 data["Signal"],
                 "WATCH",
-            ).sum()
+            )
         )
-        early_count = int(
+        early_count = count_true(
             signal_contains(
                 data["Signal"],
                 "EARLY",
-            ).sum()
+            )
         )
-        skip_count = int(
+        skip_count = count_true(
             signal_contains(
                 data["Signal"],
                 "SKIP",
-            ).sum()
+            )
         )
-        extended_count = int(
+        extended_count = count_true(
             signal_contains(
                 data["Signal"],
                 "EXTENDED",
-            ).sum()
+            )
         )
-        breakout_count = int(
+        breakout_count = count_true(
             setup_contains(
                 data["Setup"],
                 "Breakout",
-            ).sum()
+            )
         )
-        early_reversal_count = int(
+        early_reversal_count = count_true(
             setup_contains(
                 data["Setup"],
                 "Early Reversal",
-            ).sum()
+            )
         )
-        pullback_count = int(
+        pullback_count = count_true(
             setup_contains(
                 data["Setup"],
                 "Pullback",
-            ).sum()
+            )
         )
         avg_score = (
             scores.mean()
