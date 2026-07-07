@@ -1,6 +1,8 @@
 # Python
 
-**pycache**/
+__pycache__/
+**/__pycache__/
+*.pyc
 *.py[cod]
 *.pyo
 
@@ -11,9 +13,13 @@ venv/
 
 # Scanner Output
 
-output/
-*.csv
-*.xlsx
+work/
+output/*.csv
+output/*.xlsx
+data/strategy_history.csv
+data/watchlist.csv
+data/watchlist_alerts.csv
+data/watchlist_scan_snapshot.csv
 
 # IDE
 
