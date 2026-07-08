@@ -11,6 +11,12 @@ from providers.thai import get_symbols
 from data import get_histories
 from indicators import add_indicators_cached
 from strategy import trend_start
+from strategy_modes import (
+    STRATEGY_MODE_CHOICES,
+    apply_strategy_mode,
+    normalize_strategy_mode,
+    strategy_mode_label,
+)
 from providers.usa import get_symbols as get_us_symbols
 from alert_engine import run_watchlist_alert_check
 from market_quality import (
@@ -121,6 +127,28 @@ def print_score_breakdown(symbol, result):
     print()
 
 
+def strategy_signal_group(signal):
+
+    signal = str(signal).upper()
+
+    if "BUY" in signal:
+        return "BUY"
+
+    if "WATCH" in signal:
+        return "WATCH"
+
+    if "EARLY" in signal:
+        return "EARLY"
+
+    if "EXTENDED" in signal:
+        return "EXTENDED"
+
+    if "SKIP" in signal:
+        return "SKIP"
+
+    return "OTHER"
+
+
 def normalize_scan_mode(mode):
 
     return str(mode or "ALL").upper().replace("_", " ").strip()
@@ -171,6 +199,7 @@ def process_symbol(
     market,
     df,
     force_refresh=False,
+    strategy_mode="standard",
 ):
 
     profile = {
@@ -211,6 +240,15 @@ def process_symbol(
     profile["decision_time"] = (
         time.perf_counter() - decision_start
     )
+    strategy_result = apply_strategy_mode(
+        df,
+        mode=strategy_mode,
+        decision=result,
+    )
+    strategy_reasons = strategy_result.get(
+        "StrategyReasons",
+        [],
+    )
 
     return {
         "symbol": symbol,
@@ -223,13 +261,20 @@ def process_symbol(
             "Price": result["price"],
             "RSI": result["rsi"],
             "RVOL": result["rvol"],
-            "Reasons": ", ".join(result["reasons"])
+            "Reasons": ", ".join(result["reasons"]),
+            "StrategyMode": strategy_result["StrategyMode"],
+            "StrategySignal": strategy_result["StrategySignal"],
+            "StrategyScore": strategy_result["StrategyScore"],
+            "StrategySetup": strategy_result["StrategySetup"],
+            "StrategyReasons": ", ".join(strategy_reasons),
         },
         "decision": result,
+        "strategy": strategy_result,
         "error": None,
         "message": (
-            f"{result['signal']} | "
-            f"Score {result['score']}"
+            f"{strategy_result['StrategySignal']} | "
+            f"Strategy Score {strategy_result['StrategyScore']} | "
+            f"Standard {result['signal']} {result['score']}"
         ),
         "profile": profile,
     }
@@ -240,9 +285,11 @@ def scan_market(
     market="SET",
     force_refresh=False,
     workers=MAX_WORKERS,
+    strategy_mode="standard",
 ):
 
     market = (market or "SET").upper()
+    strategy_mode = normalize_strategy_mode(strategy_mode)
     symbols = dedupe_symbols(
         load_symbols(
             index,
@@ -257,6 +304,7 @@ def scan_market(
     print(f"\n========== SCANNING {index} ==========\n")
     print(f"Total Symbols : {len(symbols)}\n")
     print(f"Workers       : {workers}\n")
+    print(f"Strategy Mode : {strategy_mode_label(strategy_mode)}\n")
 
     download_start = time.perf_counter()
     histories = get_histories(
@@ -282,6 +330,7 @@ def scan_market(
                 market,
                 histories.get(symbol, pd.DataFrame()),
                 force_refresh,
+                strategy_mode,
             ): symbol
             for symbol in symbols
         }
@@ -378,6 +427,7 @@ def scan_market_legacy(index="SET", market="SET", force_refresh=False):
                 market,
                 histories.get(symbol, pd.DataFrame()),
                 force_refresh,
+                "standard",
             )
 
             if payload["row"] is None:
@@ -465,34 +515,49 @@ def show_summary(df):
     print("\n========== MARKET SUMMARY ==========\n")
 
     summary_rows = []
+    signal_col = (
+        "StrategySignal"
+        if "StrategySignal" in df.columns
+        else "Signal"
+    )
+    setup_col = (
+        "StrategySetup"
+        if "StrategySetup" in df.columns
+        else "Setup"
+    )
+    score_col = (
+        "StrategyScore"
+        if "StrategyScore" in df.columns
+        else "Score"
+    )
 
     for market, data in df.groupby("Market"):
 
         summary_rows.append({
             "Market": market,
             "Stocks": len(data),
-            "Buy Candidates": data["Signal"].apply(
+            "Buy Candidates": data[signal_col].apply(
                 is_buy_candidate
             ).sum(),
-            "WATCH": data["Signal"].astype(str).str.contains(
+            "WATCH": data[signal_col].astype(str).str.contains(
                 "WATCH",
                 regex=False,
             ).sum(),
-            "EARLY": data["Signal"].astype(str).str.contains(
+            "EARLY": data[signal_col].astype(str).str.contains(
                 "EARLY",
                 regex=False,
             ).sum(),
             "SKIP": (
-                data["Signal"] == "SKIP"
+                data[signal_col] == "SKIP"
             ).sum(),
             "EXTENDED": (
-                data["Signal"] == "EXTENDED"
+                data[signal_col] == "EXTENDED"
             ).sum(),
             "Avg Score": round(
-                data["Score"].mean(),
+                data[score_col].mean(),
                 1,
             ),
-            "Max Score": data["Score"].max(),
+            "Max Score": data[score_col].max(),
         })
 
     print(
@@ -506,7 +571,7 @@ def show_summary(df):
         top = (
             df[df["Market"] == market]
             .sort_values(
-                by="Score",
+                by=score_col,
                 ascending=False
             )
             .head(10)
@@ -522,9 +587,9 @@ def show_summary(df):
             top[
                 [
                     "Symbol",
-                    "Signal",
-                    "Setup",
-                    "Score",
+                    signal_col,
+                    setup_col,
+                    score_col,
                     "Price",
                     "RSI",
                     "RVOL",
@@ -702,19 +767,26 @@ def show_performance_report(profile):
     print(f"\nSaved Scanner Profile: {PROFILE_FILE}")
 
 
-def main(force_refresh=False, mode="ALL", workers=MAX_WORKERS):
+def main(
+    force_refresh=False,
+    mode="ALL",
+    workers=MAX_WORKERS,
+    strategy_mode="standard",
+):
 
     all_results = []
     market_scan_seconds = defaultdict(float)
     scan_timings = []
     total_start = time.perf_counter()
     scan_plan = resolve_scan_plan(mode)
+    strategy_mode = normalize_strategy_mode(strategy_mode)
 
     if force_refresh:
         print("\nPRICE CACHE : Force refresh enabled\n")
 
     print(f"\nSCAN MODE   : {mode}")
     print(f"MAX WORKERS : {workers}\n")
+    print(f"STRATEGY    : {strategy_mode_label(strategy_mode)}\n")
 
     for index, market in scan_plan:
 
@@ -723,6 +795,7 @@ def main(force_refresh=False, mode="ALL", workers=MAX_WORKERS):
             market=market,
             force_refresh=force_refresh,
             workers=workers,
+            strategy_mode=strategy_mode,
         )
 
         market_scan_seconds[market.upper()] += timing["Total Time"]
@@ -760,7 +833,9 @@ def main(force_refresh=False, mode="ALL", workers=MAX_WORKERS):
         return
 
     df = df.sort_values(
-        by="Score",
+        by="StrategyScore"
+        if "StrategyScore" in df.columns
+        else "Score",
         ascending=False
     )
 
@@ -818,10 +893,17 @@ if __name__ == "__main__":
         default=MAX_WORKERS,
         help="Parallel worker count for indicator and decision processing.",
     )
+    parser.add_argument(
+        "--strategy-mode",
+        default="standard",
+        choices=STRATEGY_MODE_CHOICES,
+        help="Scanner strategy mode: standard, early, breakout, momentum.",
+    )
     args = parser.parse_args()
 
     main(
         force_refresh=args.force_refresh,
         mode=args.mode,
         workers=args.workers,
+        strategy_mode=args.strategy_mode,
     )

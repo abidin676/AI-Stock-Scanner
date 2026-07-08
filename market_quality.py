@@ -7,6 +7,7 @@ import pandas as pd
 MARKET_QUALITY_FILE = Path("output") / "market_quality.csv"
 MARKET_QUALITY_COLUMNS = [
     "Market",
+    "StrategyMode",
     "LastScanTime",
     "ScanTimeSeconds",
     "TotalStocks",
@@ -94,6 +95,63 @@ def safe_numeric(series):
     ).fillna(0)
 
 
+def first_existing_column(df, columns, default_name):
+
+    for column in columns:
+        if column in df.columns:
+            return column
+
+    df[default_name] = ""
+
+    return default_name
+
+
+def normalize_strategy_columns(df):
+
+    data = df.copy()
+
+    if "Signal" not in data.columns:
+        data["Signal"] = ""
+
+    if "Setup" not in data.columns:
+        data["Setup"] = ""
+
+    if "Score" not in data.columns:
+        data["Score"] = 0
+
+    if "StrategyMode" not in data.columns:
+        data["StrategyMode"] = "Standard"
+
+    if "StrategySignal" not in data.columns:
+        data["StrategySignal"] = data["Signal"]
+
+    if "StrategySetup" not in data.columns:
+        data["StrategySetup"] = data["Setup"]
+
+    if "StrategyScore" not in data.columns:
+        data["StrategyScore"] = data["Score"]
+
+    return data
+
+
+def dominant_strategy_mode(df):
+
+    if df.empty or "StrategyMode" not in df.columns:
+        return "Standard"
+
+    modes = (
+        df["StrategyMode"]
+        .fillna("Standard")
+        .astype(str)
+        .replace("", "Standard")
+    )
+
+    if modes.empty:
+        return "Standard"
+
+    return modes.mode().iloc[0]
+
+
 def count_true(series):
 
     if series.empty:
@@ -154,30 +212,22 @@ def calculate_market_quality(
     if results is None:
         results = pd.DataFrame()
 
-    df = results.copy()
+    df = normalize_strategy_columns(results)
 
     if "Market" not in df.columns:
         df["Market"] = ""
-
-    if "Signal" not in df.columns:
-        df["Signal"] = ""
-
-    if "Setup" not in df.columns:
-        df["Setup"] = ""
-
-    if "Score" not in df.columns:
-        df["Score"] = 0
 
     for market in markets:
         market = str(market).upper()
         data = df[
             df["Market"].astype(str).str.upper() == market
         ].copy()
+        strategy_mode = dominant_strategy_mode(data)
         total_stocks = int(len(data))
         scores = safe_numeric(
-            data["Score"]
+            data["StrategyScore"]
         )
-        buy_mask = data["Signal"].apply(
+        buy_mask = data["StrategySignal"].apply(
             is_buy_signal
         )
         buy_count = count_true(
@@ -185,43 +235,43 @@ def calculate_market_quality(
         )
         watch_count = count_true(
             signal_contains(
-                data["Signal"],
+                data["StrategySignal"],
                 "WATCH",
             )
         )
         early_count = count_true(
             signal_contains(
-                data["Signal"],
+                data["StrategySignal"],
                 "EARLY",
             )
         )
         skip_count = count_true(
             signal_contains(
-                data["Signal"],
+                data["StrategySignal"],
                 "SKIP",
             )
         )
         extended_count = count_true(
             signal_contains(
-                data["Signal"],
+                data["StrategySignal"],
                 "EXTENDED",
             )
         )
         breakout_count = count_true(
             setup_contains(
-                data["Setup"],
+                data["StrategySetup"],
                 "Breakout",
             )
         )
         early_reversal_count = count_true(
             setup_contains(
-                data["Setup"],
+                data["StrategySetup"],
                 "Early Reversal",
             )
         )
         pullback_count = count_true(
             setup_contains(
-                data["Setup"],
+                data["StrategySetup"],
                 "Pullback",
             )
         )
@@ -265,6 +315,7 @@ def calculate_market_quality(
 
         rows.append({
             "Market": market,
+            "StrategyMode": strategy_mode,
             "LastScanTime": last_scan_time,
             "ScanTimeSeconds": round(
                 scan_time_seconds.get(
@@ -383,7 +434,12 @@ def latest_market_quality_with_trend(history):
     data["_row_order"] = range(len(data))
     rows = []
 
-    for market, group in data.groupby("Market", dropna=False):
+    group_columns = [
+        "Market",
+        "StrategyMode",
+    ]
+
+    for _, group in data.groupby(group_columns, dropna=False):
         group = group.sort_values(
             [
                 "_scan_time",

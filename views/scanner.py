@@ -27,6 +27,12 @@ SCAN_MODE_OPTIONS = [
     "USA Watchlist",
     "USA All",
 ]
+STRATEGY_MODE_OPTIONS = [
+    "Standard",
+    "Early",
+    "Breakout",
+    "Momentum",
+]
 SIGNAL_ORDER = {
     "BUY": 0,
     "WATCH": 1,
@@ -38,6 +44,10 @@ SIGNAL_ORDER = {
 DISPLAY_COLUMNS = [
     "Symbol",
     "Market",
+    "StrategyMode",
+    "StrategySignal",
+    "StrategySetup",
+    "StrategyScore",
     "Signal",
     "Setup",
     "Score",
@@ -54,6 +64,7 @@ ROW_COLORS = {
 }
 QUALITY_DISPLAY_COLUMNS = [
     "Market",
+    "StrategyMode",
     "QualityScore",
     "QualityLabel",
     "Trend",
@@ -88,10 +99,47 @@ def signal_group(signal):
     return "OTHER"
 
 
+def ensure_strategy_columns(df):
+
+    data = df.copy()
+
+    if "Signal" not in data.columns:
+        data["Signal"] = ""
+
+    if "Setup" not in data.columns:
+        data["Setup"] = ""
+
+    if "Score" not in data.columns:
+        data["Score"] = 0
+
+    if "StrategyMode" not in data.columns:
+        data["StrategyMode"] = "Standard"
+
+    if "StrategySignal" not in data.columns:
+        data["StrategySignal"] = data["Signal"]
+
+    if "StrategySetup" not in data.columns:
+        data["StrategySetup"] = data["Setup"]
+
+    if "StrategyScore" not in data.columns:
+        data["StrategyScore"] = data["Score"]
+
+    data["StrategyScore"] = pd.to_numeric(
+        data["StrategyScore"],
+        errors="coerce",
+    ).fillna(0)
+    data["Score"] = pd.to_numeric(
+        data["Score"],
+        errors="coerce",
+    ).fillna(0)
+
+    return data
+
+
 def prepare_data(df):
 
-    df = df.copy()
-    df["_signal_group"] = df["Signal"].apply(signal_group)
+    df = ensure_strategy_columns(df)
+    df["_signal_group"] = df["StrategySignal"].apply(signal_group)
     df["_signal_rank"] = df["_signal_group"].map(
         SIGNAL_ORDER
     ).fillna(
@@ -106,7 +154,7 @@ def sort_results(df):
     return df.sort_values(
         [
             "_signal_rank",
-            "Score",
+            "StrategyScore",
             "RVOL",
             "RSI",
         ],
@@ -174,14 +222,45 @@ def load_quality_for_dashboard(df, last_scan):
             last_scan,
         )
 
+    current_mode = current_strategy_mode(df)
+    latest = latest[
+        latest["StrategyMode"].fillna("Standard").astype(str)
+        == current_mode
+    ]
+
+    if latest.empty:
+        return latest_quality_from_results(
+            df,
+            last_scan,
+        )
+
     return latest
+
+
+def current_strategy_mode(df):
+
+    if "StrategyMode" not in df.columns or df.empty:
+        return "Standard"
+
+    modes = (
+        df["StrategyMode"]
+        .fillna("Standard")
+        .astype(str)
+        .replace("", "Standard")
+    )
+
+    if modes.empty:
+        return "Standard"
+
+    return modes.mode().iloc[0]
 
 
 def watchlist_label(row):
 
     return (
         f"{row['Symbol']} | {row['Market']} | "
-        f"{row['Signal']} | {row['Setup']} | Score {row['Score']}"
+        f"{row['StrategySignal']} | {row['StrategySetup']} | "
+        f"Score {row['StrategyScore']}"
     )
 
 
@@ -434,10 +513,10 @@ def build_market_summary(df):
             "EARLY": int((data["_signal_group"] == "EARLY").sum()),
             "EXTENDED": int((data["_signal_group"] == "EXTENDED").sum()),
             "SKIP": int((data["_signal_group"] == "SKIP").sum()),
-            "Avg Score": round(data["Score"].mean(), 1)
+            "Avg Score": round(data["StrategyScore"].mean(), 1)
             if not data.empty
             else 0,
-            "Max Score": data["Score"].max()
+            "Max Score": data["StrategyScore"].max()
             if not data.empty
             else 0,
         })
@@ -562,6 +641,15 @@ def render_add_to_watchlist(df):
         setup=row.get("Setup", ""),
         score=safe_number(row.get("Score", 0.0)),
         signal=row.get("Signal", ""),
+        strategy_mode=row.get("StrategyMode", "Standard"),
+        strategy_setup=row.get("StrategySetup", row.get("Setup", "")),
+        strategy_score=safe_number(
+            row.get(
+                "StrategyScore",
+                row.get("Score", 0.0),
+            )
+        ),
+        strategy_signal=row.get("StrategySignal", row.get("Signal", "")),
         stop_loss=stop_loss,
         target=target,
         note=note,
@@ -570,7 +658,7 @@ def render_add_to_watchlist(df):
     st.success(f"Added {row['Symbol']} to Watchlist")
 
 
-def run_scanner_from_dashboard(force_refresh, mode, workers):
+def run_scanner_from_dashboard(force_refresh, mode, workers, strategy_mode):
 
     command = [
         sys.executable,
@@ -579,6 +667,8 @@ def run_scanner_from_dashboard(force_refresh, mode, workers):
         mode,
         "--workers",
         str(workers),
+        "--strategy-mode",
+        strategy_mode.lower(),
     ]
 
     if force_refresh:
@@ -609,6 +699,11 @@ def render_scanner_actions():
         step=1,
         key="scanner_workers",
     )
+    strategy_mode = st.sidebar.selectbox(
+        "Strategy Mode",
+        STRATEGY_MODE_OPTIONS,
+        key="scanner_strategy_mode",
+    )
     run_clicked = st.sidebar.button(
         "Run Scanner"
     )
@@ -626,6 +721,7 @@ def render_scanner_actions():
             force_refresh=force_clicked,
             mode=scan_mode,
             workers=workers,
+            strategy_mode=strategy_mode,
         )
 
     output = (
@@ -667,6 +763,7 @@ def scanner_page():
     ).strftime("%d/%m/%Y %H:%M:%S")
 
     st.caption(f"Last Scan: {last_scan}")
+    st.caption(f"Strategy Mode: {current_strategy_mode(df)}")
 
     render_market_quality_cards(
         df,
@@ -691,7 +788,7 @@ def scanner_page():
     )
 
     signal_filter = st.sidebar.multiselect(
-        "Signal",
+        "Strategy Signal",
         [
             "ALL",
             "BUY",

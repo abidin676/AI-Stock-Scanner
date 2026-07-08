@@ -20,6 +20,10 @@ ALERT_COLUMNS = [
     "Score",
     "Price",
     "Setup",
+    "StrategyMode",
+    "StrategySignal",
+    "StrategyScore",
+    "StrategySetup",
     "Channel",
     "Delivered",
 ]
@@ -31,6 +35,10 @@ SNAPSHOT_COLUMNS = [
     "Score",
     "Price",
     "Setup",
+    "StrategyMode",
+    "StrategySignal",
+    "StrategyScore",
+    "StrategySetup",
     "StopLoss",
     "Target",
     "ScanTime",
@@ -158,12 +166,19 @@ def load_snapshot():
         return _empty_snapshot()
 
     df = pd.read_csv(SNAPSHOT_FILE)
+    numeric_columns = (
+        "Score",
+        "Price",
+        "StopLoss",
+        "Target",
+        "StrategyScore",
+    )
 
     for column in SNAPSHOT_COLUMNS:
         if column not in df.columns:
-            df[column] = 0 if column in ("Score", "Price", "StopLoss", "Target") else ""
+            df[column] = 0 if column in numeric_columns else ""
 
-    for column in ("Score", "Price", "StopLoss", "Target"):
+    for column in numeric_columns:
         df[column] = pd.to_numeric(
             df[column],
             errors="coerce",
@@ -179,10 +194,17 @@ def save_snapshot(df):
     )
 
     df = df.copy()
+    numeric_columns = (
+        "Score",
+        "Price",
+        "StopLoss",
+        "Target",
+        "StrategyScore",
+    )
 
     for column in SNAPSHOT_COLUMNS:
         if column not in df.columns:
-            df[column] = 0 if column in ("Score", "Price", "StopLoss", "Target") else ""
+            df[column] = 0 if column in numeric_columns else ""
 
     df[SNAPSHOT_COLUMNS].to_csv(
         SNAPSHOT_FILE,
@@ -197,6 +219,18 @@ def build_current_snapshot(scanner_results, watchlist):
 
     scan = scanner_results.copy()
     watch = watchlist.copy()
+
+    if "StrategyMode" not in scan.columns:
+        scan["StrategyMode"] = "Standard"
+
+    if "StrategySignal" not in scan.columns:
+        scan["StrategySignal"] = scan.get("Signal", "")
+
+    if "StrategyScore" not in scan.columns:
+        scan["StrategyScore"] = scan.get("Score", 0)
+
+    if "StrategySetup" not in scan.columns:
+        scan["StrategySetup"] = scan.get("Setup", "")
 
     for df in (scan, watch):
         df["Symbol"] = df["Symbol"].astype(str).str.upper().str.strip()
@@ -221,6 +255,9 @@ def build_current_snapshot(scanner_results, watchlist):
     if current.empty:
         return _empty_snapshot()
 
+    current["Signal"] = current["StrategySignal"]
+    current["Setup"] = current["StrategySetup"]
+    current["Score"] = current["StrategyScore"]
     current["SignalGroup"] = current["Signal"].apply(signal_group)
     current["Score"] = pd.to_numeric(
         current["Score"],
@@ -241,6 +278,7 @@ def build_current_snapshot(scanner_results, watchlist):
     current["ScanTime"] = datetime.now().isoformat(
         timespec="seconds"
     )
+    current["StrategyScore"] = current["Score"]
 
     return current[SNAPSHOT_COLUMNS]
 
@@ -259,6 +297,10 @@ def alert_row(row, alert_type, message, old_value, new_value):
         "Score": row["Score"],
         "Price": row["Price"],
         "Setup": row["Setup"],
+        "StrategyMode": row.get("StrategyMode", "Standard"),
+        "StrategySignal": row.get("StrategySignal", row["Signal"]),
+        "StrategyScore": row.get("StrategyScore", row["Score"]),
+        "StrategySetup": row.get("StrategySetup", row["Setup"]),
         "Channel": "dashboard",
         "Delivered": False,
     }

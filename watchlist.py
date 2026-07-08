@@ -20,6 +20,10 @@ WATCHLIST_COLUMNS = [
     "Setup",
     "Score",
     "Signal",
+    "StrategyMode",
+    "StrategySetup",
+    "StrategyScore",
+    "StrategySignal",
     "StopLoss",
     "Target",
     "Status",
@@ -28,6 +32,7 @@ WATCHLIST_COLUMNS = [
 NUMERIC_COLUMNS = [
     "Price",
     "Score",
+    "StrategyScore",
     "StopLoss",
     "Target",
 ]
@@ -43,6 +48,7 @@ def _empty_watchlist():
 def _normalize_watchlist(df):
 
     df = df.copy()
+    missing_strategy_score = "StrategyScore" not in df.columns
 
     for column in WATCHLIST_COLUMNS:
 
@@ -56,6 +62,16 @@ def _normalize_watchlist(df):
     df["AddedDate"] = df["AddedDate"].fillna("")
     df["Setup"] = df["Setup"].fillna("")
     df["Signal"] = df["Signal"].fillna("")
+    df["StrategyMode"] = (
+        df["StrategyMode"]
+        .fillna("")
+        .astype(str)
+        .replace("", "Standard")
+    )
+    df["StrategySetup"] = df["StrategySetup"].fillna("")
+    df["StrategySignal"] = df["StrategySignal"].fillna("")
+    df.loc[df["StrategySetup"] == "", "StrategySetup"] = df["Setup"]
+    df.loc[df["StrategySignal"] == "", "StrategySignal"] = df["Signal"]
     df["Note"] = df["Note"].fillna("")
     df["Status"] = (
         df["Status"]
@@ -71,6 +87,9 @@ def _normalize_watchlist(df):
             df[column],
             errors="coerce",
         ).fillna(0).astype(float)
+
+    if missing_strategy_score:
+        df["StrategyScore"] = df["Score"]
 
     return df
 
@@ -115,6 +134,10 @@ def add_to_watchlist(
     setup="",
     score=0,
     signal="",
+    strategy_mode="Standard",
+    strategy_setup="",
+    strategy_score=None,
+    strategy_signal="",
     stop_loss=0,
     target=0,
     note="",
@@ -125,6 +148,11 @@ def add_to_watchlist(
     symbol = str(symbol).upper().strip()
     market = str(market).upper().strip()
     status = str(status).upper().strip() or "WATCHING"
+    strategy_score = (
+        score
+        if strategy_score is None
+        else strategy_score
+    )
 
     mask = (
         (df["Symbol"] == symbol)
@@ -138,6 +166,10 @@ def add_to_watchlist(
         df.loc[index, "Setup"] = setup
         df.loc[index, "Score"] = float(score or 0)
         df.loc[index, "Signal"] = signal
+        df.loc[index, "StrategyMode"] = strategy_mode or "Standard"
+        df.loc[index, "StrategySetup"] = strategy_setup or setup
+        df.loc[index, "StrategyScore"] = float(strategy_score or 0)
+        df.loc[index, "StrategySignal"] = strategy_signal or signal
         df.loc[index, "StopLoss"] = float(stop_loss or 0)
         df.loc[index, "Target"] = float(target or 0)
         if note:
@@ -153,6 +185,10 @@ def add_to_watchlist(
             "Setup": setup,
             "Score": float(score or 0),
             "Signal": signal,
+            "StrategyMode": strategy_mode or "Standard",
+            "StrategySetup": strategy_setup or setup,
+            "StrategyScore": float(strategy_score or 0),
+            "StrategySignal": strategy_signal or signal,
             "StopLoss": float(stop_loss or 0),
             "Target": float(target or 0),
             "Status": status,
