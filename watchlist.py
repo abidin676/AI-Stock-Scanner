@@ -24,6 +24,10 @@ WATCHLIST_COLUMNS = [
     "StrategySetup",
     "StrategyScore",
     "StrategySignal",
+    "LifecycleState",
+    "PreviousLifecycleState",
+    "DaysInState",
+    "StateChanged",
     "StopLoss",
     "Target",
     "Status",
@@ -33,6 +37,7 @@ NUMERIC_COLUMNS = [
     "Price",
     "Score",
     "StrategyScore",
+    "DaysInState",
     "StopLoss",
     "Target",
 ]
@@ -72,6 +77,33 @@ def _normalize_watchlist(df):
     df["StrategySignal"] = df["StrategySignal"].fillna("")
     df.loc[df["StrategySetup"] == "", "StrategySetup"] = df["Setup"]
     df.loc[df["StrategySignal"] == "", "StrategySignal"] = df["Signal"]
+    df["LifecycleState"] = (
+        df["LifecycleState"]
+        .fillna("UNKNOWN")
+        .astype(str)
+        .str.upper()
+        .str.strip()
+        .replace("", "UNKNOWN")
+    )
+    df["PreviousLifecycleState"] = (
+        df["PreviousLifecycleState"]
+        .fillna("UNKNOWN")
+        .astype(str)
+        .str.upper()
+        .str.strip()
+        .replace("", "UNKNOWN")
+    )
+    df["StateChanged"] = df["StateChanged"].apply(
+        lambda value: value
+        if isinstance(value, bool)
+        else str(value).strip().upper()
+        in {
+            "TRUE",
+            "1",
+            "YES",
+            "Y",
+        }
+    )
     df["Note"] = df["Note"].fillna("")
     df["Status"] = (
         df["Status"]
@@ -138,6 +170,10 @@ def add_to_watchlist(
     strategy_setup="",
     strategy_score=None,
     strategy_signal="",
+    lifecycle_state="UNKNOWN",
+    previous_lifecycle_state="UNKNOWN",
+    days_in_state=0,
+    state_changed=False,
     stop_loss=0,
     target=0,
     note="",
@@ -152,6 +188,21 @@ def add_to_watchlist(
         score
         if strategy_score is None
         else strategy_score
+    )
+    lifecycle_state = str(lifecycle_state or "UNKNOWN").upper().strip()
+    previous_lifecycle_state = str(
+        previous_lifecycle_state or "UNKNOWN"
+    ).upper().strip()
+    state_changed = (
+        state_changed
+        if isinstance(state_changed, bool)
+        else str(state_changed).strip().upper()
+        in {
+            "TRUE",
+            "1",
+            "YES",
+            "Y",
+        }
     )
 
     mask = (
@@ -170,6 +221,10 @@ def add_to_watchlist(
         df.loc[index, "StrategySetup"] = strategy_setup or setup
         df.loc[index, "StrategyScore"] = float(strategy_score or 0)
         df.loc[index, "StrategySignal"] = strategy_signal or signal
+        df.loc[index, "LifecycleState"] = lifecycle_state
+        df.loc[index, "PreviousLifecycleState"] = previous_lifecycle_state
+        df.loc[index, "DaysInState"] = int(float(days_in_state or 0))
+        df.loc[index, "StateChanged"] = state_changed
         df.loc[index, "StopLoss"] = float(stop_loss or 0)
         df.loc[index, "Target"] = float(target or 0)
         if note:
@@ -189,6 +244,10 @@ def add_to_watchlist(
             "StrategySetup": strategy_setup or setup,
             "StrategyScore": float(strategy_score or 0),
             "StrategySignal": strategy_signal or signal,
+            "LifecycleState": lifecycle_state,
+            "PreviousLifecycleState": previous_lifecycle_state,
+            "DaysInState": int(float(days_in_state or 0)),
+            "StateChanged": state_changed,
             "StopLoss": float(stop_loss or 0),
             "Target": float(target or 0),
             "Status": status,

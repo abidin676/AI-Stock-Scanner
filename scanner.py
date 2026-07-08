@@ -17,6 +17,7 @@ from strategy_modes import (
     normalize_strategy_mode,
     strategy_mode_label,
 )
+from strategy_lifecycle import update_lifecycle_from_scan
 from providers.usa import get_symbols as get_us_symbols
 from alert_engine import run_watchlist_alert_check
 from market_quality import (
@@ -831,6 +832,11 @@ def main(
         print("No Stocks")
 
         return
+
+    df = update_lifecycle_from_scan(
+        df,
+        strategy_mode=strategy_mode,
+    )
 
     df = df.sort_values(
         by="StrategyScore"

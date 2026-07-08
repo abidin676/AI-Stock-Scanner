@@ -14,6 +14,7 @@ from market_quality import (
     latest_market_quality_with_trend,
     load_market_quality,
 )
+from strategy_lifecycle import get_state_transitions
 from watchlist import add_to_watchlist
 
 
@@ -41,9 +42,23 @@ SIGNAL_ORDER = {
     "SKIP": 4,
     "OTHER": 5,
 }
+LIFECYCLE_STATES = [
+    "ALL",
+    "EARLY",
+    "BREAKOUT",
+    "MOMENTUM",
+    "EXTENDED",
+    "WATCH",
+    "SKIP",
+    "UNKNOWN",
+]
 DISPLAY_COLUMNS = [
     "Symbol",
     "Market",
+    "LifecycleState",
+    "PreviousLifecycleState",
+    "DaysInState",
+    "StateChanged",
     "StrategyMode",
     "StrategySignal",
     "StrategySetup",
@@ -61,6 +76,15 @@ ROW_COLORS = {
     "EARLY": "#fef9c3",
     "EXTENDED": "#ffedd5",
     "SKIP": "#f3f4f6",
+}
+LIFECYCLE_ROW_COLORS = {
+    "EARLY": "#dcfce7",
+    "BREAKOUT": "#ffedd5",
+    "MOMENTUM": "#dbeafe",
+    "EXTENDED": "#fed7aa",
+    "WATCH": "#e0f2fe",
+    "SKIP": "#f3f4f6",
+    "UNKNOWN": "#f9fafb",
 }
 QUALITY_DISPLAY_COLUMNS = [
     "Market",
@@ -136,9 +160,59 @@ def ensure_strategy_columns(df):
     return data
 
 
+def ensure_lifecycle_columns(df):
+
+    data = df.copy()
+
+    if "LifecycleState" not in data.columns:
+        data["LifecycleState"] = "UNKNOWN"
+
+    if "PreviousLifecycleState" not in data.columns:
+        data["PreviousLifecycleState"] = "UNKNOWN"
+
+    if "DaysInState" not in data.columns:
+        data["DaysInState"] = 0
+
+    if "StateChanged" not in data.columns:
+        data["StateChanged"] = False
+
+    data["LifecycleState"] = (
+        data["LifecycleState"]
+        .fillna("UNKNOWN")
+        .astype(str)
+        .str.upper()
+        .replace("", "UNKNOWN")
+    )
+    data["PreviousLifecycleState"] = (
+        data["PreviousLifecycleState"]
+        .fillna("UNKNOWN")
+        .astype(str)
+        .str.upper()
+        .replace("", "UNKNOWN")
+    )
+    data["DaysInState"] = pd.to_numeric(
+        data["DaysInState"],
+        errors="coerce",
+    ).fillna(0).astype(int)
+    data["StateChanged"] = data["StateChanged"].apply(
+        lambda value: str(value).strip().upper()
+        in {
+            "TRUE",
+            "1",
+            "YES",
+            "Y",
+        }
+        if not isinstance(value, bool)
+        else value
+    )
+
+    return data
+
+
 def prepare_data(df):
 
     df = ensure_strategy_columns(df)
+    df = ensure_lifecycle_columns(df)
     df["_signal_group"] = df["StrategySignal"].apply(signal_group)
     df["_signal_rank"] = df["_signal_group"].map(
         SIGNAL_ORDER
@@ -287,7 +361,14 @@ def selected_candidate_row(candidates, selected):
     ].iloc[0]
 
 
-def apply_filters(df, market_filter, signal_filter, symbol_search):
+def apply_filters(
+    df,
+    market_filter,
+    signal_filter,
+    symbol_search,
+    lifecycle_filter=None,
+    state_changed_only=False,
+):
 
     data = df.copy()
 
@@ -298,6 +379,18 @@ def apply_filters(df, market_filter, signal_filter, symbol_search):
         data = data[
             data["_signal_group"].isin(signal_filter)
         ]
+
+    lifecycle_filter = lifecycle_filter or [
+        "ALL",
+    ]
+
+    if "ALL" not in lifecycle_filter:
+        data = data[
+            data["LifecycleState"].isin(lifecycle_filter)
+        ]
+
+    if state_changed_only:
+        data = data[data["StateChanged"]]
 
     symbol_search = symbol_search.strip().upper()
 
@@ -310,6 +403,73 @@ def apply_filters(df, market_filter, signal_filter, symbol_search):
         ]
 
     return sort_results(data)
+
+
+def render_lifecycle_section(df):
+
+    st.subheader("Strategy Lifecycle")
+
+    changed = df[df["StateChanged"]]
+    metric_cols = st.columns(5)
+
+    metrics = [
+        (
+            "New Early",
+            int(
+                (
+                    (changed["LifecycleState"] == "EARLY")
+                ).sum()
+            ),
+        ),
+        (
+            "New Breakout",
+            int(
+                (
+                    (changed["LifecycleState"] == "BREAKOUT")
+                ).sum()
+            ),
+        ),
+        (
+            "New Momentum",
+            int(
+                (
+                    (changed["LifecycleState"] == "MOMENTUM")
+                ).sum()
+            ),
+        ),
+        (
+            "Extended Count",
+            int(
+                (
+                    df["LifecycleState"] == "EXTENDED"
+                ).sum()
+            ),
+        ),
+        (
+            "State Changes Today",
+            int(len(changed)),
+        ),
+    ]
+
+    for column, (label, value) in zip(metric_cols, metrics):
+        column.metric(
+            label,
+            value,
+        )
+
+    transitions = get_state_transitions(
+        limit=25,
+    )
+
+    with st.expander("Recent State Transitions"):
+        if transitions.empty:
+            st.info("No recent state transitions")
+        else:
+            st.dataframe(
+                transitions,
+                use_container_width=True,
+                hide_index=True,
+            )
 
 
 def render_market_quality_cards(df, last_scan):
@@ -424,10 +584,22 @@ def render_table(df):
 
     for _, row in df.iterrows():
 
-        group = row.get("_signal_group", "OTHER")
-        background = ROW_COLORS.get(
-            group,
-            "#ffffff",
+        lifecycle_state = str(
+            row.get(
+                "LifecycleState",
+                "",
+            )
+        ).upper()
+        group = row.get(
+            "_signal_group",
+            "OTHER",
+        )
+        background = LIFECYCLE_ROW_COLORS.get(
+            lifecycle_state,
+            ROW_COLORS.get(
+                group,
+                "#ffffff",
+            ),
         )
 
         cell_style = (
@@ -650,6 +822,13 @@ def render_add_to_watchlist(df):
             )
         ),
         strategy_signal=row.get("StrategySignal", row.get("Signal", "")),
+        lifecycle_state=row.get("LifecycleState", "UNKNOWN"),
+        previous_lifecycle_state=row.get(
+            "PreviousLifecycleState",
+            "UNKNOWN",
+        ),
+        days_in_state=safe_number(row.get("DaysInState", 0)),
+        state_changed=row.get("StateChanged", False),
         stop_loss=stop_loss,
         target=target,
         note=note,
@@ -770,6 +949,8 @@ def scanner_page():
         last_scan,
     )
 
+    render_lifecycle_section(df)
+
     st.sidebar.header("Filter")
 
     market_filter = st.sidebar.selectbox(
@@ -805,6 +986,19 @@ def scanner_page():
         ],
     )
 
+    lifecycle_filter = st.sidebar.multiselect(
+        "Lifecycle State",
+        LIFECYCLE_STATES,
+        default=[
+            "ALL",
+        ],
+    )
+
+    state_changed_only = st.sidebar.checkbox(
+        "State Changed Only",
+        value=False,
+    )
+
     render_summary(df)
 
     st.divider()
@@ -824,6 +1018,8 @@ def scanner_page():
         market_filter,
         signal_filter,
         symbol_search,
+        lifecycle_filter,
+        state_changed_only,
     )
 
     st.subheader("Scanner Results")

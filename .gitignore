@@ -19,6 +19,7 @@ data/indicator_cache/
 output/*.csv
 output/*.xlsx
 data/strategy_history.csv
+data/strategy_lifecycle.csv
 data/watchlist.csv
 data/watchlist_alerts.csv
 data/watchlist_scan_snapshot.csv

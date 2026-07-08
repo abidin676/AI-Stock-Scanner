@@ -10,6 +10,7 @@ SNAPSHOT_FILE = Path("data") / "watchlist_scan_snapshot.csv"
 ALERT_FILE = Path("data") / "watchlist_alerts.csv"
 ALERT_COLUMNS = [
     "AlertTime",
+    "AlertKey",
     "Symbol",
     "Market",
     "AlertType",
@@ -20,6 +21,8 @@ ALERT_COLUMNS = [
     "Score",
     "Price",
     "Setup",
+    "LifecycleState",
+    "PreviousLifecycleState",
     "StrategyMode",
     "StrategySignal",
     "StrategyScore",
@@ -35,14 +38,27 @@ SNAPSHOT_COLUMNS = [
     "Score",
     "Price",
     "Setup",
+    "LifecycleState",
+    "PreviousLifecycleState",
+    "DaysInState",
+    "StateChanged",
     "StrategyMode",
     "StrategySignal",
     "StrategyScore",
     "StrategySetup",
     "StopLoss",
     "Target",
+    "LastAlertKey",
     "ScanTime",
 ]
+LIFECYCLE_TRANSITIONS = {
+    ("EARLY", "BREAKOUT"),
+    ("BREAKOUT", "MOMENTUM"),
+    ("MOMENTUM", "EXTENDED"),
+    ("WATCH", "EARLY"),
+    ("SKIP", "EARLY"),
+    ("SKIP", "BREAKOUT"),
+}
 
 
 class DashboardAlertNotifier:
@@ -92,6 +108,42 @@ def _safe_float(value, default=0.0):
         return default
 
 
+def _safe_int(value, default=0):
+
+    try:
+        if pd.isna(value):
+            return default
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_bool(value):
+
+    if isinstance(value, bool):
+        return value
+
+    if isinstance(value, (int, float)):
+        return value != 0
+
+    return str(value).strip().upper() in {
+        "TRUE",
+        "1",
+        "YES",
+        "Y",
+    }
+
+
+def _normalize_state(value):
+
+    state = str(value or "UNKNOWN").strip().upper()
+
+    if not state or state == "NAN":
+        return "UNKNOWN"
+
+    return state
+
+
 def signal_group(signal):
 
     signal = str(signal).upper()
@@ -117,6 +169,28 @@ def signal_group(signal):
 def is_breakout(setup):
 
     return "BREAKOUT" in str(setup).upper()
+
+
+def lifecycle_alert_key(symbol, old_state, new_state):
+
+    return (
+        f"LIFECYCLE:{str(symbol).upper().strip()}:"
+        f"{old_state}>{new_state}"
+    )
+
+
+def existing_alert_keys():
+
+    alerts = load_alerts()
+
+    if alerts.empty or "AlertKey" not in alerts.columns:
+        return set()
+
+    return {
+        str(value)
+        for value in alerts["AlertKey"].dropna()
+        if str(value).strip()
+    }
 
 
 def load_alerts():
@@ -172,6 +246,7 @@ def load_snapshot():
         "StopLoss",
         "Target",
         "StrategyScore",
+        "DaysInState",
     )
 
     for column in SNAPSHOT_COLUMNS:
@@ -200,6 +275,7 @@ def save_snapshot(df):
         "StopLoss",
         "Target",
         "StrategyScore",
+        "DaysInState",
     )
 
     for column in SNAPSHOT_COLUMNS:
@@ -231,6 +307,18 @@ def build_current_snapshot(scanner_results, watchlist):
 
     if "StrategySetup" not in scan.columns:
         scan["StrategySetup"] = scan.get("Setup", "")
+
+    if "LifecycleState" not in scan.columns:
+        scan["LifecycleState"] = "UNKNOWN"
+
+    if "PreviousLifecycleState" not in scan.columns:
+        scan["PreviousLifecycleState"] = "UNKNOWN"
+
+    if "DaysInState" not in scan.columns:
+        scan["DaysInState"] = 0
+
+    if "StateChanged" not in scan.columns:
+        scan["StateChanged"] = False
 
     for df in (scan, watch):
         df["Symbol"] = df["Symbol"].astype(str).str.upper().str.strip()
@@ -279,14 +367,37 @@ def build_current_snapshot(scanner_results, watchlist):
         timespec="seconds"
     )
     current["StrategyScore"] = current["Score"]
+    current["LifecycleState"] = current["LifecycleState"].apply(
+        _normalize_state
+    )
+    current["PreviousLifecycleState"] = current[
+        "PreviousLifecycleState"
+    ].apply(
+        _normalize_state
+    )
+    current["DaysInState"] = current["DaysInState"].apply(
+        _safe_int
+    )
+    current["StateChanged"] = current["StateChanged"].apply(
+        _safe_bool
+    )
+    current["LastAlertKey"] = ""
 
     return current[SNAPSHOT_COLUMNS]
 
 
-def alert_row(row, alert_type, message, old_value, new_value):
+def alert_row(
+    row,
+    alert_type,
+    message,
+    old_value,
+    new_value,
+    alert_key="",
+):
 
     return {
         "AlertTime": datetime.now().isoformat(timespec="seconds"),
+        "AlertKey": alert_key,
         "Symbol": row["Symbol"],
         "Market": row["Market"],
         "AlertType": alert_type,
@@ -297,6 +408,11 @@ def alert_row(row, alert_type, message, old_value, new_value):
         "Score": row["Score"],
         "Price": row["Price"],
         "Setup": row["Setup"],
+        "LifecycleState": row.get("LifecycleState", "UNKNOWN"),
+        "PreviousLifecycleState": row.get(
+            "PreviousLifecycleState",
+            "UNKNOWN",
+        ),
         "StrategyMode": row.get("StrategyMode", "Standard"),
         "StrategySignal": row.get("StrategySignal", row["Signal"]),
         "StrategyScore": row.get("StrategyScore", row["Score"]),
@@ -318,6 +434,8 @@ def build_alerts(current, previous):
         ]
     )
     rows = []
+    alert_keys = existing_alert_keys()
+    generated_keys = set()
 
     for _, row in current.iterrows():
         key = (
@@ -337,6 +455,30 @@ def build_alerts(current, previous):
         new_price = _safe_float(row["Price"])
         stop_loss = _safe_float(row["StopLoss"])
         target = _safe_float(row["Target"])
+        old_lifecycle = _normalize_state(
+            old.get(
+                "LifecycleState",
+                "",
+            )
+        )
+        new_lifecycle = _normalize_state(
+            row.get(
+                "LifecycleState",
+                "UNKNOWN",
+            )
+        )
+        scan_previous_lifecycle = _normalize_state(
+            row.get(
+                "PreviousLifecycleState",
+                "UNKNOWN",
+            )
+        )
+
+        if (
+            old_lifecycle == "UNKNOWN"
+            and scan_previous_lifecycle != "UNKNOWN"
+        ):
+            old_lifecycle = scan_previous_lifecycle
 
         if old_signal != new_signal:
             rows.append(
@@ -348,6 +490,37 @@ def build_alerts(current, previous):
                     new_signal,
                 )
             )
+
+        lifecycle_transition = (
+            old_lifecycle,
+            new_lifecycle,
+        )
+
+        if lifecycle_transition in LIFECYCLE_TRANSITIONS:
+            key_value = lifecycle_alert_key(
+                row["Symbol"],
+                old_lifecycle,
+                new_lifecycle,
+            )
+
+            if (
+                key_value not in alert_keys
+                and key_value not in generated_keys
+            ):
+                rows.append(
+                    alert_row(
+                        row,
+                        "LIFECYCLE_CHANGE",
+                        (
+                            f"{row['Symbol']} lifecycle changed from "
+                            f"{old_lifecycle} to {new_lifecycle}"
+                        ),
+                        old_lifecycle,
+                        new_lifecycle,
+                        alert_key=key_value,
+                    )
+                )
+                generated_keys.add(key_value)
 
         score_change = new_score - old_score
 
