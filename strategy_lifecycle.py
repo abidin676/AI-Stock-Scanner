@@ -7,6 +7,7 @@ import pandas as pd
 LIFECYCLE_FILE = Path("data") / "strategy_lifecycle.csv"
 
 LIFECYCLE_STATES = [
+    "SEED",
     "EARLY",
     "BREAKOUT",
     "MOMENTUM",
@@ -106,6 +107,9 @@ def _normalize_bool(value):
 def normalize_strategy_mode(value):
 
     mode = _safe_text(value, "Standard").strip().lower()
+
+    if "pure" in mode or "seed" in mode or "ต้นน้ำ" in mode:
+        return "🌱 Pure Early"
 
     if "early" in mode:
         return "Early"
@@ -357,14 +361,37 @@ def map_to_lifecycle_state(row):
             ),
         )
     )
-
+    setup = _safe_text(
+        row.get(
+            "StrategySetup",
+            row.get(
+                "Setup",
+                "",
+            ),
+        )
+    ).upper()
     if "EXTENDED" in signal:
         return "EXTENDED"
+
+    if "BREAKOUT" in signal or "BREAKOUT" in setup:
+        if "BUY" in signal or "WATCH" in signal:
+            return "BREAKOUT"
+
+    if "MOMENTUM" in signal:
+        return "MOMENTUM"
+
+    if "SEED BUY" in signal or "SEED WATCH" in signal:
+        return "SEED"
 
     if "SKIP" in signal:
         return "SKIP"
 
-    if mode == "Early":
+    if mode in {
+        "Early",
+        "🌱 Pure Early",
+    }:
+        if "SEED" in signal:
+            return "SEED"
         if "BUY" in signal or "WATCH" in signal or "EARLY" in signal:
             return "EARLY"
         return "UNKNOWN"

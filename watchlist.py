@@ -28,6 +28,11 @@ WATCHLIST_COLUMNS = [
     "PreviousLifecycleState",
     "DaysInState",
     "StateChanged",
+    "OpportunityScore",
+    "OpportunityGrade",
+    "Confidence",
+    "RecommendedAction",
+    "OpportunityReasons",
     "StopLoss",
     "Target",
     "Status",
@@ -38,6 +43,8 @@ NUMERIC_COLUMNS = [
     "Score",
     "StrategyScore",
     "DaysInState",
+    "OpportunityScore",
+    "Confidence",
     "StopLoss",
     "Target",
 ]
@@ -104,6 +111,9 @@ def _normalize_watchlist(df):
             "Y",
         }
     )
+    df["OpportunityGrade"] = df["OpportunityGrade"].fillna("")
+    df["RecommendedAction"] = df["RecommendedAction"].fillna("")
+    df["OpportunityReasons"] = df["OpportunityReasons"].fillna("")
     df["Note"] = df["Note"].fillna("")
     df["Status"] = (
         df["Status"]
@@ -174,6 +184,11 @@ def add_to_watchlist(
     previous_lifecycle_state="UNKNOWN",
     days_in_state=0,
     state_changed=False,
+    opportunity_score=0,
+    opportunity_grade="",
+    confidence=0,
+    recommended_action="",
+    opportunity_reasons="",
     stop_loss=0,
     target=0,
     note="",
@@ -225,6 +240,11 @@ def add_to_watchlist(
         df.loc[index, "PreviousLifecycleState"] = previous_lifecycle_state
         df.loc[index, "DaysInState"] = int(float(days_in_state or 0))
         df.loc[index, "StateChanged"] = state_changed
+        df.loc[index, "OpportunityScore"] = float(opportunity_score or 0)
+        df.loc[index, "OpportunityGrade"] = opportunity_grade
+        df.loc[index, "Confidence"] = float(confidence or 0)
+        df.loc[index, "RecommendedAction"] = recommended_action
+        df.loc[index, "OpportunityReasons"] = opportunity_reasons
         df.loc[index, "StopLoss"] = float(stop_loss or 0)
         df.loc[index, "Target"] = float(target or 0)
         if note:
@@ -248,6 +268,11 @@ def add_to_watchlist(
             "PreviousLifecycleState": previous_lifecycle_state,
             "DaysInState": int(float(days_in_state or 0)),
             "StateChanged": state_changed,
+            "OpportunityScore": float(opportunity_score or 0),
+            "OpportunityGrade": opportunity_grade,
+            "Confidence": float(confidence or 0),
+            "RecommendedAction": recommended_action,
+            "OpportunityReasons": opportunity_reasons,
             "StopLoss": float(stop_loss or 0),
             "Target": float(target or 0),
             "Status": status,

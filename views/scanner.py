@@ -14,11 +14,33 @@ from market_quality import (
     latest_market_quality_with_trend,
     load_market_quality,
 )
-from strategy_lifecycle import get_state_transitions
+from opportunity_engine import (
+    OPPORTUNITY_COLUMNS,
+    calculate_opportunities,
+)
+from priority_engine import (
+    PRIORITY_COLUMNS,
+    PRIORITY_FILE,
+    PRIORITY_UI_OPTIONS,
+    apply_priority_mode,
+    load_priority_results,
+    recommend_priority_mode,
+)
+from strategy_lifecycle import (
+    get_state_transitions,
+    load_lifecycle,
+)
 from watchlist import add_to_watchlist
 
 
-RESULT_FILE = Path("output") / "scanner_results.xlsx"
+RESULT_CSV_FILE = Path("output") / "scanner_results.csv"
+RESULT_XLSX_FILE = Path("output") / "scanner_results.xlsx"
+OPPORTUNITY_RESULT_FILE = Path("output") / "opportunity_results.csv"
+PRIORITY_RESULT_FILE = PRIORITY_FILE
+RESULT_FILES = [
+    RESULT_CSV_FILE,
+    RESULT_XLSX_FILE,
+]
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCAN_MODE_OPTIONS = [
     "ALL",
@@ -31,6 +53,7 @@ SCAN_MODE_OPTIONS = [
 STRATEGY_MODE_OPTIONS = [
     "Standard",
     "Early",
+    "Pure Early",
     "Breakout",
     "Momentum",
 ]
@@ -42,8 +65,10 @@ SIGNAL_ORDER = {
     "SKIP": 4,
     "OTHER": 5,
 }
+SIGNAL_GROUPS = set(SIGNAL_ORDER.keys())
 LIFECYCLE_STATES = [
     "ALL",
+    "SEED",
     "EARLY",
     "BREAKOUT",
     "MOMENTUM",
@@ -55,7 +80,29 @@ LIFECYCLE_STATES = [
 DISPLAY_COLUMNS = [
     "Symbol",
     "Market",
+    "PriorityRank",
+    "PriorityScore",
+    "PriorityMode",
+    "PriorityAction",
+    "OpportunityRank",
+    "OpportunityScore",
+    "OpportunityGrade",
+    "Confidence",
+    "RecommendedAction",
     "LifecycleState",
+    "SeedScore",
+    "SeedProbability",
+    "FreshnessScore",
+    "PatternName",
+    "PatternScore",
+    "VCPProbability",
+    "BaseQuality",
+    "AccumulationScore",
+    "ExpansionScore",
+    "BottomingSeedScore",
+    "DowntrendDecelerationScore",
+    "SellingPressureScore",
+    "SmallCandleScore",
     "PreviousLifecycleState",
     "DaysInState",
     "StateChanged",
@@ -63,12 +110,148 @@ DISPLAY_COLUMNS = [
     "StrategySignal",
     "StrategySetup",
     "StrategyScore",
+    "BaseDays",
+    "BaseTightnessPct",
+    "HighLowRange10",
+    "HighLowRange20",
+    "DryVolumeDays",
+    "DryVolumeScore",
+    "Vol5ToVol20",
+    "EMACompressionPct",
+    "ATRPercentile60",
+    "ATRCompressionScore",
+    "PocketPivot",
+    "PriceAboveLowClose20Pct",
+    "Return5DPct",
+    "Return10DPct",
+    "BullishCandleStreak",
+    "WideRangeBullishCount",
+    "MomentumEstablished",
+    "LowerLowsStopped",
+    "FirstHigherLow",
+    "EMA9CurlUp",
+    "EMA20Improving",
+    "FirstIgnition",
+    "DistanceFromHigh60Pct",
+    "NearLow60Pct",
+    "EMA9EMA20SpreadPct",
     "Signal",
     "Setup",
     "Score",
     "Price",
     "RSI",
     "RVOL",
+]
+OPPORTUNITY_DISPLAY_COLUMNS = [
+    "PriorityRank",
+    "PriorityScore",
+    "PriorityMode",
+    "PriorityAction",
+    "PriorityReasons",
+    "OpportunityRank",
+    "Symbol",
+    "Market",
+    "OpportunityScore",
+    "OpportunityGrade",
+    "Confidence",
+    "RecommendedAction",
+    "LifecycleState",
+    "DaysInState",
+    "SeedScore",
+    "FreshnessScore",
+    "PatternName",
+    "PatternScore",
+    "VCPProbability",
+    "BaseQuality",
+    "AccumulationScore",
+    "ExpansionScore",
+    "BottomingSeedScore",
+    "DowntrendDecelerationScore",
+    "BaseDays",
+    "BaseTightnessPct",
+    "DryVolumeDays",
+    "DryVolumeScore",
+    "Vol5ToVol20",
+    "EMACompressionPct",
+    "ATRPercentile60",
+    "PriceAboveLowClose20Pct",
+    "Return5DPct",
+    "Return10DPct",
+    "EMA9EMA20SpreadPct",
+    "StrategyMode",
+    "StrategySignal",
+    "StrategyScore",
+    "Price",
+    "RSI",
+    "RVOL",
+    "RiskPct",
+    "RewardPct",
+    "RR",
+]
+OPPORTUNITY_OVERVIEW_COLUMNS = [
+    "PriorityRank",
+    "PriorityScore",
+    "PriorityAction",
+    "PriorityMode",
+    "PriorityReasons",
+    "OpportunityRank",
+    "Symbol",
+    "Market",
+    "OpportunityScore",
+    "RecommendedAction",
+    "LifecycleState",
+    "DaysInState",
+    "SeedScore",
+    "FreshnessScore",
+    "PatternName",
+    "PatternScore",
+    "VCPProbability",
+    "BaseQuality",
+    "AccumulationScore",
+    "ExpansionScore",
+    "BottomingSeedScore",
+    "DowntrendDecelerationScore",
+    "BaseDays",
+    "BaseTightnessPct",
+    "DryVolumeDays",
+    "DryVolumeScore",
+    "EMACompressionPct",
+    "PriceAboveLowClose20Pct",
+    "Return5DPct",
+    "Return10DPct",
+    "EMA9EMA20SpreadPct",
+    "StrategySignal",
+    "StrategyScore",
+    "RSI",
+    "RVOL",
+    "RiskPct",
+    "RewardPct",
+    "RR",
+]
+SEED_DETAIL_COLUMNS = [
+    "Rank",
+    "Symbol",
+    "RecommendedAction",
+    "LifecycleState",
+    "SeedScore",
+    "FreshnessScore",
+    "ExpansionScore",
+    "PatternName",
+    "BaseDays",
+    "DryVolumeDays",
+    "EMACompressionPct",
+    "RiskPct",
+    "PriorityScore",
+    "PriorityAction",
+]
+OPPORTUNITY_ACTIONS = [
+    "ALL",
+    "Strong Buy",
+    "Buy",
+    "Watch Closely",
+    "Watch",
+    "Early Watch",
+    "Ignore",
 ]
 ROW_COLORS = {
     "BUY": "#dcfce7",
@@ -123,9 +306,112 @@ def signal_group(signal):
     return "OTHER"
 
 
+def result_file_modified_time(path):
+
+    return datetime.fromtimestamp(
+        path.stat().st_mtime
+    )
+
+
+def result_file_display_time(path):
+
+    return result_file_modified_time(path).strftime(
+        "%d/%m/%Y %H:%M:%S"
+    )
+
+
+def select_scanner_result_file():
+
+    if RESULT_CSV_FILE.exists():
+        return RESULT_CSV_FILE
+
+    if RESULT_XLSX_FILE.exists():
+        return RESULT_XLSX_FILE
+
+    return None
+
+
+def load_scanner_results_from_disk():
+
+    path = select_scanner_result_file()
+
+    if path is None:
+        return pd.DataFrame(), None
+
+    try:
+        if path.suffix.lower() == ".csv":
+            return pd.read_csv(path), path
+
+        return pd.read_excel(path), path
+
+    except Exception as exc:
+        st.warning(
+            f"Could not load scanner results: {exc}"
+        )
+        return pd.DataFrame(), path
+
+
+def load_opportunity_results_from_disk(scanner_df=None):
+
+    if OPPORTUNITY_RESULT_FILE.exists():
+        try:
+            return (
+                pd.read_csv(OPPORTUNITY_RESULT_FILE),
+                OPPORTUNITY_RESULT_FILE,
+                False,
+            )
+        except pd.errors.EmptyDataError:
+            return (
+                pd.DataFrame(),
+                OPPORTUNITY_RESULT_FILE,
+                False,
+            )
+        except Exception as exc:
+            st.warning(
+                f"Could not load opportunity results: {exc}"
+            )
+
+    if scanner_df is not None and not scanner_df.empty:
+        return (
+            scanner_df.copy(),
+            None,
+            True,
+        )
+
+    return (
+        pd.DataFrame(),
+        None,
+        True,
+    )
+
+
+def load_priority_results_from_disk():
+
+    if not PRIORITY_RESULT_FILE.exists():
+        return pd.DataFrame(), PRIORITY_RESULT_FILE, True
+
+    try:
+        return (
+            load_priority_results(PRIORITY_RESULT_FILE),
+            PRIORITY_RESULT_FILE,
+            False,
+        )
+    except Exception as exc:
+        st.warning(
+            f"Could not load priority results: {exc}"
+        )
+        return pd.DataFrame(), PRIORITY_RESULT_FILE, True
+
+
 def ensure_strategy_columns(df):
 
     data = df.copy()
+
+    if "Symbol" not in data.columns:
+        data["Symbol"] = ""
+
+    if "Market" not in data.columns:
+        data["Market"] = ""
 
     if "Signal" not in data.columns:
         data["Signal"] = ""
@@ -156,6 +442,20 @@ def ensure_strategy_columns(df):
         data["Score"],
         errors="coerce",
     ).fillna(0)
+    data["Symbol"] = (
+        data["Symbol"]
+        .fillna("")
+        .astype(str)
+        .str.upper()
+        .str.strip()
+    )
+    data["Market"] = (
+        data["Market"]
+        .fillna("")
+        .astype(str)
+        .str.upper()
+        .str.strip()
+    )
 
     return data
 
@@ -209,10 +509,155 @@ def ensure_lifecycle_columns(df):
     return data
 
 
+def ensure_opportunity_columns(df):
+
+    data = df.copy()
+
+    if not set(OPPORTUNITY_COLUMNS).issubset(data.columns):
+        data = calculate_opportunities(
+            data,
+            lifecycle=load_lifecycle(),
+            market_quality=load_market_quality(),
+        )
+
+    if "OpportunityScore" not in data.columns:
+        data["OpportunityScore"] = 0
+
+    if "OpportunityRank" not in data.columns:
+        data["OpportunityRank"] = range(
+            1,
+            len(data) + 1,
+        )
+
+    if "OpportunityGrade" not in data.columns:
+        data["OpportunityGrade"] = "★☆☆☆☆ Ignore"
+
+    if "Confidence" not in data.columns:
+        data["Confidence"] = 0
+
+    if "RecommendedAction" not in data.columns:
+        data["RecommendedAction"] = "Ignore"
+
+    if "OpportunityReasons" not in data.columns:
+        data["OpportunityReasons"] = ""
+
+    for column in [
+        "RiskPct",
+        "RewardPct",
+        "RR",
+    ]:
+        if column not in data.columns:
+            data[column] = 0
+
+    data["OpportunityScore"] = pd.to_numeric(
+        data["OpportunityScore"],
+        errors="coerce",
+    ).fillna(0)
+    data["OpportunityRank"] = pd.to_numeric(
+        data["OpportunityRank"],
+        errors="coerce",
+    ).fillna(0).astype(int)
+    data["Confidence"] = pd.to_numeric(
+        data["Confidence"],
+        errors="coerce",
+    ).fillna(0)
+    for column in [
+        "RiskPct",
+        "RewardPct",
+        "RR",
+    ]:
+        data[column] = pd.to_numeric(
+            data[column],
+            errors="coerce",
+        ).fillna(0)
+
+    return data
+
+
+def ensure_priority_columns(
+    df,
+    priority_mode="Seed First",
+    quality=None,
+    lifecycle=None,
+    ai_recommendation=None,
+):
+
+    data = df.copy()
+    ai_recommendation = ai_recommendation or {
+        "AIRecommendedPriority": priority_mode,
+        "AIRecommendationReason": "",
+    }
+
+    if not set(PRIORITY_COLUMNS).issubset(data.columns):
+        data = apply_priority_mode(
+            data,
+            priority_mode,
+            market_quality_df=quality,
+            lifecycle_df=lifecycle,
+            ai_recommended_priority=ai_recommendation.get(
+                "AIRecommendedPriority",
+                priority_mode,
+            ),
+            ai_recommendation_reason=ai_recommendation.get(
+                "AIRecommendationReason",
+                "",
+            ),
+        )
+
+    if "PriorityScore" not in data.columns:
+        data["PriorityScore"] = data.get(
+            "OpportunityScore",
+            data.get("StrategyScore", data.get("Score", 0)),
+        )
+
+    if "PriorityRank" not in data.columns:
+        data = data.sort_values(
+            "PriorityScore",
+            ascending=False,
+        ).reset_index(drop=True)
+        data["PriorityRank"] = range(
+            1,
+            len(data) + 1,
+        )
+
+    if "PriorityMode" not in data.columns:
+        data["PriorityMode"] = priority_mode
+
+    if "PriorityAction" not in data.columns:
+        data["PriorityAction"] = ""
+
+    if "PriorityReasons" not in data.columns:
+        data["PriorityReasons"] = ""
+
+    if "AIRecommendedPriority" not in data.columns:
+        data["AIRecommendedPriority"] = ai_recommendation.get(
+            "AIRecommendedPriority",
+            priority_mode,
+        )
+
+    if "AIRecommendationReason" not in data.columns:
+        data["AIRecommendationReason"] = ai_recommendation.get(
+            "AIRecommendationReason",
+            "",
+        )
+
+    data["PriorityScore"] = pd.to_numeric(
+        data["PriorityScore"],
+        errors="coerce",
+    ).fillna(0)
+    data["PriorityRank"] = pd.to_numeric(
+        data["PriorityRank"],
+        errors="coerce",
+    ).fillna(0).astype(int)
+
+    return data
+
+
 def prepare_data(df):
 
     df = ensure_strategy_columns(df)
     df = ensure_lifecycle_columns(df)
+    df = ensure_opportunity_columns(df)
     df["_signal_group"] = df["StrategySignal"].apply(signal_group)
     df["_signal_rank"] = df["_signal_group"].map(
         SIGNAL_ORDER
@@ -228,12 +673,14 @@ def sort_results(df):
     return df.sort_values(
         [
             "_signal_rank",
+            "OpportunityScore",
             "StrategyScore",
             "RVOL",
             "RSI",
         ],
         ascending=[
             True,
+            False,
             False,
             False,
             True,
@@ -375,16 +822,34 @@ def apply_filters(
     if market_filter != "ALL":
         data = data[data["Market"] == market_filter]
 
-    if "ALL" not in signal_filter:
+    if signal_filter and "ALL" not in signal_filter:
+        grouped_filters = [
+            signal
+            for signal in signal_filter
+            if signal in SIGNAL_GROUPS
+        ]
+        exact_filters = [
+            signal.upper()
+            for signal in signal_filter
+            if signal not in SIGNAL_GROUPS
+        ]
+        group_mask = data["_signal_group"].isin(
+            grouped_filters
+        )
+        exact_mask = data["StrategySignal"].astype(str).str.upper().isin(
+            exact_filters
+        )
         data = data[
-            data["_signal_group"].isin(signal_filter)
+            group_mask
+            |
+            exact_mask
         ]
 
     lifecycle_filter = lifecycle_filter or [
         "ALL",
     ]
 
-    if "ALL" not in lifecycle_filter:
+    if lifecycle_filter and "ALL" not in lifecycle_filter:
         data = data[
             data["LifecycleState"].isin(lifecycle_filter)
         ]
@@ -405,14 +870,312 @@ def apply_filters(
     return sort_results(data)
 
 
+def scanner_debug_info(df, result_path):
+
+    if result_path is None:
+        modified_time = "N/A"
+        loaded_path = "N/A"
+    else:
+        modified_time = result_file_display_time(result_path)
+        loaded_path = str(result_path)
+
+    scan_mode = "N/A"
+
+    for column in (
+        "ScanMode",
+        "Mode",
+        "Index",
+    ):
+        if column in df.columns:
+            values = (
+                df[column]
+                .dropna()
+                .astype(str)
+                .replace("", pd.NA)
+                .dropna()
+                .unique()
+                .tolist()
+            )
+            if values:
+                scan_mode = ", ".join(
+                    sorted(values)
+                )
+                break
+
+    return {
+        "Loaded file path": loaded_path,
+        "File modified time": modified_time,
+        "Loaded rows": int(len(df)),
+        "SET rows": int((df["Market"] == "SET").sum())
+        if "Market" in df.columns
+        else 0,
+        "USA rows": int((df["Market"] == "USA").sum())
+        if "Market" in df.columns
+        else 0,
+        "StrategyMode values found": ", ".join(
+            sorted(
+                df["StrategyMode"]
+                .fillna("Standard")
+                .astype(str)
+                .replace("", "Standard")
+                .unique()
+                .tolist()
+            )
+        )
+        if "StrategyMode" in df.columns
+        else "Standard",
+        "ScanMode": scan_mode,
+    }
+
+
+def dataframe_values(df, column, default="N/A"):
+
+    if column not in df.columns:
+        return default
+
+    values = (
+        df[column]
+        .dropna()
+        .astype(str)
+        .replace("", pd.NA)
+        .dropna()
+        .unique()
+        .tolist()
+    )
+
+    if not values:
+        return default
+
+    return ", ".join(
+        sorted(values)
+    )
+
+
+def opportunity_debug_info(df, result_path, is_fallback=False):
+
+    if result_path is None:
+        loaded_path = (
+            "Fallback: scanner_results"
+            if is_fallback
+            else "N/A"
+        )
+        modified_time = "N/A"
+    else:
+        loaded_path = str(result_path)
+        modified_time = result_file_display_time(result_path)
+
+    return {
+        "Loaded opportunity file path": loaded_path,
+        "Modified time": modified_time,
+        "Loaded rows": int(len(df)),
+        "SET rows": int((df["Market"] == "SET").sum())
+        if "Market" in df.columns
+        else 0,
+        "USA rows": int((df["Market"] == "USA").sum())
+        if "Market" in df.columns
+        else 0,
+        "StrategyMode values": dataframe_values(
+            df,
+            "StrategyMode",
+            "Standard",
+        ),
+        "ScanMode values": dataframe_values(
+            df,
+            "ScanMode",
+            "N/A",
+        ),
+    }
+
+
+def render_scanner_status(df, result_path, last_scan):
+
+    info = scanner_debug_info(
+        df,
+        result_path,
+    )
+    cols = st.columns(4)
+    cols[0].metric(
+        "Scan Mode",
+        info["ScanMode"],
+    )
+    cols[1].metric(
+        "Strategy Mode",
+        current_strategy_mode(df),
+    )
+    cols[2].metric(
+        "Rows Loaded",
+        int(len(df)),
+    )
+    cols[3].metric(
+        "Last Scan Time",
+        last_scan,
+    )
+
+
+def render_debug_info(df, result_path):
+
+    info = scanner_debug_info(
+        df,
+        result_path,
+    )
+
+    with st.expander("Debug Info"):
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Metric": key,
+                        "Value": str(value),
+                    }
+                    for key, value in info.items()
+                ]
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+
+def render_opportunity_debug(df, result_path, is_fallback=False):
+
+    info = opportunity_debug_info(
+        df,
+        result_path,
+        is_fallback=is_fallback,
+    )
+
+    with st.expander("Opportunity Debug"):
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Metric": key,
+                        "Value": str(value),
+                    }
+                    for key, value in info.items()
+                ]
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+
+def priority_debug_info(
+    df,
+    selected_mode,
+    ai_recommendation,
+    priority_path=PRIORITY_RESULT_FILE,
+):
+
+    signal = (
+        df["StrategySignal"].astype(str).str.upper()
+        if "StrategySignal" in df.columns
+        else pd.Series("", index=df.index)
+    )
+    setup = (
+        df["StrategySetup"].astype(str).str.upper()
+        if "StrategySetup" in df.columns
+        else pd.Series("", index=df.index)
+    )
+    state = (
+        df["LifecycleState"].astype(str).str.upper()
+        if "LifecycleState" in df.columns
+        else pd.Series("", index=df.index)
+    )
+
+    return {
+        "Selected PriorityMode": selected_mode,
+        "AI Recommended Priority": ai_recommendation.get(
+            "AIRecommendedPriority",
+            "N/A",
+        ),
+        "Priority file path": str(priority_path),
+        "Priority file exists": priority_path.exists(),
+        "Rows loaded": int(len(df)),
+        "Top PriorityScore": safe_number(
+            df["PriorityScore"].max()
+        )
+        if "PriorityScore" in df.columns and not df.empty
+        else 0,
+        "Number of Seed candidates": int(
+            (
+                signal.str.contains("SEED|EARLY", regex=True, na=False)
+                | setup.str.contains(
+                    "SEED|EARLY|ACCUMULATION|EMA20 TURN",
+                    regex=True,
+                    na=False,
+                )
+                | (state == "SEED")
+                | (
+                    pd.to_numeric(
+                        df.get(
+                            "SeedScore",
+                            pd.Series(0, index=df.index),
+                        ),
+                        errors="coerce",
+                    ).fillna(0) >= 82
+                )
+            ).sum()
+        ),
+        "Number of Breakout candidates": int(
+            (
+                signal.str.contains("BREAKOUT", regex=True, na=False)
+                | setup.str.contains(
+                    "BREAKOUT|POCKET PIVOT",
+                    regex=True,
+                    na=False,
+                )
+                | (state == "BREAKOUT")
+            ).sum()
+        ),
+        "Number of Momentum candidates": int(
+            (
+                signal.str.contains("MOMENTUM", regex=True, na=False)
+                | (state == "MOMENTUM")
+            ).sum()
+        ),
+    }
+
+
+def render_priority_debug(df, selected_mode, ai_recommendation):
+
+    info = priority_debug_info(
+        df,
+        selected_mode,
+        ai_recommendation,
+    )
+
+    with st.expander("Priority Debug"):
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Metric": key,
+                        "Value": str(value),
+                    }
+                    for key, value in info.items()
+                ]
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+
 def render_lifecycle_section(df):
 
     st.subheader("Strategy Lifecycle")
 
     changed = df[df["StateChanged"]]
-    metric_cols = st.columns(5)
+    metric_cols = st.columns(6)
 
     metrics = [
+        (
+            "New Seed",
+            int(
+                (
+                    (changed["LifecycleState"] == "SEED")
+                ).sum()
+            ),
+        ),
         (
             "New Early",
             int(
@@ -472,6 +1235,102 @@ def render_lifecycle_section(df):
             )
 
 
+def market_quality_recommendation(score):
+
+    score = safe_number(score)
+
+    if score >= 80:
+        return (
+            "Strong",
+            "Market is supportive. Focus on the cleanest seed and breakout setups.",
+        )
+
+    if score >= 60:
+        return (
+            "Healthy",
+            "Review quality accumulation setups. Avoid low-conviction chasing.",
+        )
+
+    if score >= 40:
+        return (
+            "Selective",
+            "Market is mixed. Review only clean early accumulation.",
+        )
+
+    if score >= 20:
+        return (
+            "Defensive",
+            "Review early accumulation only. Avoid chasing breakouts.",
+        )
+
+    return (
+        "Defensive",
+        "Review early accumulation only. Avoid chasing breakouts.",
+    )
+
+
+def market_quality_color(score):
+
+    score = safe_number(score)
+
+    if score >= 80:
+        return "#22c55e"
+
+    if score >= 60:
+        return "#60a5fa"
+
+    if score >= 40:
+        return "#facc15"
+
+    if score >= 20:
+        return "#fb923c"
+
+    return "#f87171"
+
+
+def render_market_quality_style():
+
+    st.markdown(
+        """
+        <style>
+        .ra-market-card {
+            border: 1px solid rgba(148, 163, 184, 0.18);
+            border-radius: 10px;
+            padding: 12px 14px;
+            background: rgba(15, 23, 42, 0.18);
+            margin-bottom: 8px;
+        }
+        .ra-market-name {
+            font-size: 0.78rem;
+            opacity: 0.72;
+            text-transform: uppercase;
+        }
+        .ra-market-tone {
+            font-size: 1.05rem;
+            font-weight: 800;
+            margin-top: 3px;
+        }
+        .ra-market-dot {
+            color: var(--market-color);
+            margin-right: 6px;
+        }
+        .ra-market-note {
+            font-size: 0.84rem;
+            opacity: 0.86;
+            margin-top: 5px;
+            line-height: 1.35;
+        }
+        .ra-market-meta {
+            font-size: 0.72rem;
+            opacity: 0.58;
+            margin-top: 8px;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_market_quality_cards(df, last_scan):
 
     quality = load_quality_for_dashboard(
@@ -479,7 +1338,8 @@ def render_market_quality_cards(df, last_scan):
         last_scan,
     )
 
-    st.subheader("Market Quality")
+    st.subheader("Today's Market")
+    render_market_quality_style()
 
     cards = st.columns(2)
 
@@ -502,60 +1362,25 @@ def render_market_quality_cards(df, last_scan):
                 "QualityLabel",
                 "",
             )
+            score = safe_number(
+                data.get(
+                    "QualityScore",
+                    0,
+                )
+            )
+            tone, recommendation = market_quality_recommendation(score)
+            color = market_quality_color(score)
 
-            st.metric(
-                f"{market} Quality Score",
-                format_quality_number(
-                    data.get(
-                        "QualityScore",
-                        0,
-                    )
-                ),
-                f"Trend {trend}",
-            )
-            st.caption(label)
-
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric(
-                "BUY Count",
-                int(
-                    safe_number(
-                        data.get(
-                            "BuyCount",
-                            0,
-                        )
-                    )
-                ),
-            )
-            c2.metric(
-                "Avg BUY Score",
-                format_quality_number(
-                    data.get(
-                        "AvgBuyScore",
-                        0,
-                    )
-                ),
-            )
-            c3.metric(
-                "Breakout Count",
-                int(
-                    safe_number(
-                        data.get(
-                            "BreakoutCount",
-                            0,
-                        )
-                    )
-                ),
-            )
-            c4.metric(
-                "Scan Time",
-                format_quality_number(
-                    data.get(
-                        "ScanTimeSeconds",
-                        0,
-                    ),
-                    "s",
-                ),
+            st.markdown(
+                f"""
+                <div class="ra-market-card" style="--market-color: {color};">
+                    <div class="ra-market-name">{market}</div>
+                    <div class="ra-market-tone"><span class="ra-market-dot">●</span>{html.escape(tone)}</div>
+                    <div class="ra-market-note">{html.escape(recommendation)}</div>
+                    <div class="ra-market-meta">Quality {score:.1f} · {html.escape(str(label))} · Trend {html.escape(str(trend))}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
             )
 
     with st.expander("Market Quality Details"):
@@ -669,6 +1494,2477 @@ def render_table(df):
     )
 
 
+def opportunity_display_columns(df):
+
+    return [
+        column
+        for column in OPPORTUNITY_DISPLAY_COLUMNS
+        if column in df.columns
+    ]
+
+
+def opportunity_overview_columns(df):
+
+    return [
+        column
+        for column in OPPORTUNITY_OVERVIEW_COLUMNS
+        if column in df.columns
+    ]
+
+
+def format_opportunity_value(value, column):
+
+    if pd.isna(value):
+        return ""
+
+    if column in {
+        "PriorityRank",
+        "OpportunityRank",
+        "DaysInState",
+    }:
+        return f"{int(safe_number(value))}"
+
+    if column in {
+        "PriorityScore",
+        "OpportunityScore",
+        "SeedScore",
+        "SeedProbability",
+        "FreshnessScore",
+        "PatternScore",
+        "VCPProbability",
+        "BaseQuality",
+        "AccumulationScore",
+        "ExpansionScore",
+        "BottomingSeedScore",
+        "DowntrendDecelerationScore",
+        "SellingPressureScore",
+        "SmallCandleScore",
+        "DistanceFromHigh60Pct",
+        "NearLow60Pct",
+        "EMA9EMA20SpreadPct",
+        "PriceAboveLowClose20Pct",
+        "Return5DPct",
+        "Return10DPct",
+        "EMACompressionPct",
+        "BaseTightnessPct",
+        "HighLowRange10",
+        "HighLowRange20",
+        "DryVolumeScore",
+        "Vol5ToVol20",
+        "ATRPercentile60",
+        "ATRCompressionScore",
+        "Confidence",
+        "RSI",
+        "RVOL",
+        "Price",
+        "RiskPct",
+        "RewardPct",
+        "RR",
+    }:
+        return f"{safe_number(value):.2f}"
+
+    if column == "StrategyScore":
+        return f"{safe_number(value):.0f}"
+
+    if column in {
+        "BaseDays",
+        "DryVolumeDays",
+        "DaysSinceEMA20SlopeTurnPositive",
+        "DaysSinceEMA9CrossEMA20",
+        "DaysSinceBreakout",
+        "BullishCandleStreak",
+        "WideRangeBullishCount",
+    }:
+        return f"{int(safe_number(value))}"
+
+    return str(value)
+
+
+def render_opportunity_overview_table(opportunities):
+
+    columns = opportunity_overview_columns(opportunities)
+
+    if not columns:
+        st.info("No opportunity columns available")
+        return
+
+    header = "".join(
+        f"<th>{html.escape(column)}</th>"
+        for column in columns
+    )
+
+    rows = []
+
+    for _, row in opportunities.iterrows():
+        action = str(
+            row.get(
+                "PriorityAction",
+                row.get(
+                    "RecommendedAction",
+                    "",
+                ),
+            )
+        )
+        recommended_action = str(
+            row.get(
+                "RecommendedAction",
+                "",
+            )
+        )
+        background = {
+            "Review First": "#dcfce7",
+            "High Priority": "#e0f2fe",
+            "Strong Buy": "#dcfce7",
+            "Buy": "#e0f2fe",
+            "Watch Closely": "#fef9c3",
+            "Watch": "#fef9c3",
+            "Early Watch": "#ffedd5",
+            "Monitor": "#ffedd5",
+            "Low Priority": "#f3f4f6",
+            "Ignore": "#f3f4f6",
+        }.get(
+            action,
+            {
+                "Strong Buy": "#dcfce7",
+                "Buy": "#e0f2fe",
+                "Watch Closely": "#fef9c3",
+                "Watch": "#fef9c3",
+                "Early Watch": "#ffedd5",
+                "Ignore": "#f3f4f6",
+            }.get(
+                recommended_action,
+                "#ffffff",
+            ),
+        )
+        cells = "".join(
+            "<td>"
+            f"{html.escape(format_opportunity_value(row[column], column))}"
+            "</td>"
+            for column in columns
+        )
+        rows.append(
+            f"<tr style='background-color: {background};'>{cells}</tr>"
+        )
+
+    st.markdown(
+        """
+        <style>
+        .opportunity-table-wrap {
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 6px;
+            overflow-x: auto;
+            margin-top: 0.5rem;
+        }
+        .opportunity-table {
+            border-collapse: collapse;
+            width: 100%;
+            min-width: 960px;
+            font-size: 13px;
+        }
+        .opportunity-table th {
+            background-color: #111827;
+            color: #f9fafb;
+            font-weight: 700;
+            padding: 9px 10px;
+            text-align: left;
+            white-space: nowrap;
+        }
+        .opportunity-table td {
+            color: #111827;
+            font-weight: 650;
+            padding: 8px 10px;
+            border-top: 1px solid rgba(17, 24, 39, 0.12);
+            white-space: nowrap;
+        }
+        @media print {
+            .opportunity-table-wrap {
+                overflow: visible;
+            }
+            .opportunity-table {
+                min-width: 0;
+                font-size: 10px;
+            }
+            .opportunity-table th,
+            .opportunity-table td {
+                padding: 5px 6px;
+                white-space: normal;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        "<div class='opportunity-table-wrap'>"
+        "<table class='opportunity-table'>"
+        f"<thead><tr>{header}</tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody>"
+        "</table>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def risk_reward_details(row):
+
+    price = safe_number(
+        row.get(
+            "Price",
+            0,
+        )
+    )
+    stop_loss = first_existing_number(
+        row,
+        [
+            "StopLoss",
+            "Stop Loss",
+            "SL",
+        ],
+    )
+    target = first_existing_number(
+        row,
+        [
+            "Target",
+            "TakeProfit",
+            "Take Profit",
+            "TP",
+        ],
+    )
+    risk = None
+    reward = None
+
+    if price > 0 and stop_loss > 0:
+        risk = price - stop_loss
+
+    if price > 0 and target > 0:
+        reward = target - price
+
+    return risk, reward
+
+
+def selected_opportunity_row(opportunities, selected):
+
+    rank = int(
+        str(selected)
+        .split("|")[0]
+        .strip()
+        .replace("#", "")
+    )
+    rank_column = (
+        "PriorityRank"
+        if "PriorityRank" in opportunities.columns
+        else "OpportunityRank"
+    )
+
+    return opportunities[
+        opportunities[rank_column] == rank
+    ].iloc[0]
+
+
+def market_quality_for_row(row, quality):
+
+    if quality.empty:
+        return 0
+
+    market = str(
+        row.get(
+            "Market",
+            "",
+        )
+    ).upper()
+    match = quality[
+        quality["Market"].astype(str).str.upper() == market
+    ]
+
+    if match.empty:
+        return 0
+
+    return safe_number(
+        match.iloc[0].get(
+            "QualityScore",
+            0,
+        )
+    )
+
+
+def split_reason_text(value, exclude=None):
+
+    exclude = set(exclude or [])
+
+    return [
+        reason.strip()
+        for reason in str(value or "").split(";")
+        if reason.strip()
+        and reason.strip() not in exclude
+    ]
+
+
+def render_reason_block(title, reasons):
+
+    if not reasons:
+        return
+
+    st.markdown(f"**{title}**")
+    st.markdown(
+        "\n".join(
+            f"- {reason}"
+            for reason in reasons
+        )
+    )
+
+
+def text_meter(label, value, maximum=100, inverse=False):
+
+    value = safe_number(value)
+    maximum = max(
+        safe_number(maximum),
+        1,
+    )
+    normalized = max(
+        0,
+        min(
+            1,
+            value / maximum,
+        ),
+    )
+    fill_value = 1 - normalized if inverse else normalized
+    filled = int(round(fill_value * 10))
+    meter = "█" * filled + "░" * (10 - filled)
+
+    return f"{label:<12} {meter} {value:.1f}"
+
+
+def rr_meter(value):
+
+    value = safe_number(value)
+    filled = int(
+        max(
+            0,
+            min(
+                5,
+                round(value),
+            ),
+        )
+    )
+    stars = "★" * filled + "☆" * (5 - filled)
+
+    return f"RR           {stars} {value:.1f}"
+
+
+def render_visual_meters(row):
+
+    meters = [
+        (
+            "Confidence",
+            meter_blocks(row.get("Confidence", 0)),
+            f"{safe_number(row.get('Confidence', 0)):.0f}",
+        ),
+        (
+            "Seed Quality",
+            meter_blocks(row.get("SeedScore", 0)),
+            f"{safe_number(row.get('SeedScore', 0)):.0f}",
+        ),
+        (
+            "Freshness",
+            meter_blocks(row.get("FreshnessScore", 0)),
+            f"{safe_number(row.get('FreshnessScore', 0)):.0f}",
+        ),
+        (
+            "Expansion",
+            meter_blocks(
+                row.get("ExpansionScore", 0),
+                inverse=True,
+            ),
+            f"{safe_number(row.get('ExpansionScore', 0)):.0f}",
+        ),
+        (
+            "RR",
+            rr_meter(row.get("RR", 0)).split(" ", 1)[1].strip(),
+            f"{safe_number(row.get('RR', 0)):.1f}",
+        ),
+    ]
+    cards = "".join(
+        f"""
+        <div class="ra-meter-card">
+            <div class="ra-meter-label">{html.escape(label)}</div>
+            <div class="ra-meter-bar">{html.escape(bar)}</div>
+            <div class="ra-meter-value">{html.escape(value)}</div>
+        </div>
+        """
+        for label, bar, value in meters
+    )
+    st.markdown(
+        f"""
+        <style>
+        .ra-meter-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 8px;
+            margin: 0.35rem 0 0.85rem 0;
+        }}
+        .ra-meter-card {{
+            border: 1px solid rgba(148, 163, 184, 0.18);
+            border-radius: 8px;
+            padding: 8px 10px;
+            background: rgba(15, 23, 42, 0.18);
+        }}
+        .ra-meter-label {{
+            font-size: 0.72rem;
+            opacity: 0.70;
+        }}
+        .ra-meter-bar {{
+            font-family: Consolas, monospace;
+            font-size: 0.88rem;
+            margin-top: 3px;
+        }}
+        .ra-meter-value {{
+            font-size: 0.78rem;
+            opacity: 0.86;
+            margin-top: 2px;
+        }}
+        </style>
+        <div class="ra-meter-grid">{cards}</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_opinion_and_next_step(row):
+
+    st.markdown("**AI Opinion**")
+    st.info(ai_opinion_from_metrics(row))
+    st.markdown("**Expected Next Step**")
+    st.success(expected_next_step(row))
+
+
+def render_opportunity_details_legacy(row, market_quality_score):
+
+    st.subheader(f"{row['Symbol']} Opportunity Details")
+
+    cols = st.columns(4)
+    cols[0].metric(
+        "Decision Score",
+        f"{safe_number(row.get('StrategyScore', row.get('Score', 0))):.0f}",
+    )
+    cols[1].metric(
+        "Opportunity Score",
+        f"{safe_number(row.get('OpportunityScore', 0)):.2f}",
+    )
+    cols[2].metric(
+        "Priority Score",
+        f"{safe_number(row.get('PriorityScore', 0)):.2f}",
+    )
+    cols[3].metric(
+        "Priority Rank",
+        int(safe_number(row.get("PriorityRank", 0))),
+    )
+
+    cols = st.columns(4)
+    cols[0].metric(
+        "Seed Score",
+        f"{safe_number(row.get('SeedScore', 0)):.2f}",
+    )
+    cols[1].metric(
+        "Seed Probability",
+        f"{safe_number(row.get('SeedProbability', 0)):.2f}",
+    )
+    cols[2].metric(
+        "Freshness",
+        f"{safe_number(row.get('FreshnessScore', 0)):.2f}",
+    )
+    cols[3].metric(
+        "Base Days",
+        int(safe_number(row.get("BaseDays", 0))),
+    )
+
+    cols = st.columns(4)
+    cols[0].metric(
+        "Pattern",
+        str(row.get("PatternName", "")),
+    )
+    cols[1].metric(
+        "Pattern Score",
+        f"{safe_number(row.get('PatternScore', 0)):.2f}",
+    )
+    cols[2].metric(
+        "VCP Probability",
+        f"{safe_number(row.get('VCPProbability', 0)):.2f}",
+    )
+    cols[3].metric(
+        "Base Quality",
+        f"{safe_number(row.get('BaseQuality', 0)):.2f}",
+    )
+
+    cols = st.columns(4)
+    cols[0].metric(
+        "Accumulation",
+        f"{safe_number(row.get('AccumulationScore', 0)):.2f}",
+    )
+    cols[1].metric(
+        "Dry Volume Days",
+        int(safe_number(row.get("DryVolumeDays", 0))),
+    )
+    cols[2].metric(
+        "EMA Compression %",
+        f"{safe_number(row.get('EMACompressionPct', 0)):.2f}",
+    )
+    cols[3].metric(
+        "ATR Percentile 60",
+        f"{safe_number(row.get('ATRPercentile60', 0)):.2f}",
+    )
+
+    cols = st.columns(4)
+    cols[0].metric(
+        "Bottoming Seed",
+        f"{safe_number(row.get('BottomingSeedScore', 0)):.2f}",
+    )
+    cols[1].metric(
+        "Downtrend Decel",
+        f"{safe_number(row.get('DowntrendDecelerationScore', 0)):.2f}",
+    )
+    cols[2].metric(
+        "Selling Pressure",
+        f"{safe_number(row.get('SellingPressureScore', 0)):.2f}",
+    )
+    cols[3].metric(
+        "Small Candles",
+        f"{safe_number(row.get('SmallCandleScore', 0)):.2f}",
+    )
+
+    cols = st.columns(4)
+    cols[0].metric(
+        "Expansion Score",
+        f"{safe_number(row.get('ExpansionScore', 0)):.2f}",
+    )
+    cols[1].metric(
+        "20-Bar Low Expansion",
+        f"{safe_number(row.get('PriceAboveLowClose20Pct', 0)):.2f}%",
+    )
+    cols[2].metric(
+        "5D Return",
+        f"{safe_number(row.get('Return5DPct', 0)):.2f}%",
+    )
+    cols[3].metric(
+        "10D Return",
+        f"{safe_number(row.get('Return10DPct', 0)):.2f}%",
+    )
+
+    cols = st.columns(4)
+    cols[0].metric(
+        "Lifecycle",
+        str(row.get("LifecycleState", "UNKNOWN")),
+    )
+    cols[1].metric(
+        "Days in State",
+        int(safe_number(row.get("DaysInState", 0))),
+    )
+    cols[2].metric(
+        "Priority Mode",
+        str(row.get("PriorityMode", "")),
+    )
+    cols[3].metric(
+        "Priority Action",
+        str(row.get("PriorityAction", "")),
+    )
+
+    cols = st.columns(4)
+    cols[0].metric(
+        "Market Quality",
+        f"{market_quality_score:.2f}",
+    )
+    cols[1].metric(
+        "Risk %",
+        f"{safe_number(row.get('RiskPct', 0)):.2f}",
+    )
+    cols[2].metric(
+        "Reward %",
+        f"{safe_number(row.get('RewardPct', 0)):.2f}",
+    )
+    cols[3].metric(
+        "RR",
+        f"{safe_number(row.get('RR', 0)):.2f}",
+    )
+
+    cols = st.columns(4)
+    cols[0].metric(
+        "Confidence",
+        f"{safe_number(row.get('Confidence', 0)):.1f}",
+    )
+    cols[1].metric(
+        "Recommended Action",
+        str(row.get("RecommendedAction", "")),
+    )
+    cols[2].metric(
+        "Strategy Signal",
+        str(row.get("StrategySignal", row.get("Signal", ""))),
+    )
+    cols[3].metric(
+        "Strategy Setup",
+        str(row.get("StrategySetup", row.get("Setup", ""))),
+    )
+
+    priority_reasons = [
+        reason.strip()
+        for reason in str(
+            row.get(
+                "PriorityReasons",
+                "",
+            )
+        ).split(";")
+        if reason.strip()
+    ]
+
+    if priority_reasons:
+        st.markdown("**Priority Reasons**")
+        st.markdown(
+            "\n".join(
+                f"- {reason}"
+                for reason in priority_reasons
+            )
+        )
+
+    ai_reason = str(
+        row.get(
+            "AIRecommendationReason",
+            "",
+        )
+    ).strip()
+
+    if ai_reason:
+        st.info(ai_reason)
+
+    seed_reasons = [
+        reason.strip()
+        for reason in str(
+            row.get(
+                "SeedReasons",
+                "",
+            )
+        ).split(";")
+        if reason.strip()
+    ]
+
+    if seed_reasons:
+        st.markdown("**Seed Reasons**")
+        st.markdown(
+            "\n".join(
+                f"- {reason}"
+                for reason in seed_reasons
+            )
+        )
+
+    chart_summary = str(
+        row.get(
+            "ChartReaderSummary",
+            "",
+        )
+    ).strip()
+
+    if chart_summary:
+        st.markdown("**Chart Reader Summary**")
+        st.info(chart_summary)
+
+    bottoming_reasons = [
+        reason.strip()
+        for reason in str(
+            row.get(
+                "BottomingReasons",
+                "",
+            )
+        ).split(";")
+        if reason.strip()
+        and reason.strip() != "Bottoming profile not confirmed"
+    ]
+
+    if bottoming_reasons:
+        st.markdown("**Bottoming / Reversal Evidence**")
+        st.markdown(
+            "\n".join(
+                f"- {reason}"
+                for reason in bottoming_reasons
+            )
+        )
+
+    expansion_reasons = [
+        reason.strip()
+        for reason in str(
+            row.get(
+                "ExpansionReasons",
+                "",
+            )
+        ).split(";")
+        if reason.strip()
+        and reason.strip() != "Expansion still quiet"
+    ]
+
+    if expansion_reasons:
+        st.markdown("**Expansion Penalties**")
+        st.markdown(
+            "\n".join(
+                f"- {reason}"
+                for reason in expansion_reasons
+            )
+        )
+
+    reasons = [
+        reason.strip()
+        for reason in str(
+            row.get(
+                "OpportunityReasons",
+                "",
+            )
+        ).split(";")
+        if reason.strip()
+    ]
+
+    if reasons:
+        st.markdown("**Opportunity Reasons**")
+        st.markdown(
+            "\n".join(
+                f"- {reason}"
+                for reason in reasons
+            )
+        )
+
+
+def render_opportunity_details(row, market_quality_score):
+
+    symbol = str(row.get("Symbol", ""))
+    st.subheader(f"{symbol} Opportunity Details")
+
+    overview, thesis, risk_tab, indicators, debug = st.tabs(
+        [
+            "Overview",
+            "Seed Thesis",
+            "Risk / Reward",
+            "Indicators",
+            "Debug",
+        ]
+    )
+
+    with overview:
+        cols = st.columns(4)
+        cols[0].metric(
+            "Symbol",
+            symbol,
+        )
+        cols[1].metric(
+            "Action",
+            str(row.get("RecommendedAction", "")),
+        )
+        cols[2].metric(
+            "SeedScore",
+            f"{safe_number(row.get('SeedScore', 0)):.1f}",
+        )
+        cols[3].metric(
+            "PriorityScore",
+            f"{safe_number(row.get('PriorityScore', 0)):.1f}",
+        )
+
+        cols = st.columns(4)
+        cols[0].metric(
+            "Confidence",
+            f"{safe_number(row.get('Confidence', 0)):.1f}",
+        )
+        cols[1].metric(
+            "Pattern",
+            str(row.get("PatternName", "")),
+        )
+        cols[2].metric(
+            "Lifecycle",
+            str(row.get("LifecycleState", "UNKNOWN")),
+        )
+        cols[3].metric(
+            "RR",
+            f"{safe_number(row.get('RR', 0)):.2f}",
+        )
+
+        cols = st.columns(2)
+        cols[0].metric(
+            "ExpansionScore",
+            f"{safe_number(row.get('ExpansionScore', 0)):.1f}",
+        )
+        cols[1].metric(
+            "Strategy Setup",
+            str(row.get("StrategySetup", row.get("Setup", ""))),
+        )
+        render_visual_meters(row)
+        render_opinion_and_next_step(row)
+        render_seed_timeline(row)
+
+    with thesis:
+        chart_summary = str(
+            row.get(
+                "ChartReaderSummary",
+                "",
+            )
+        ).strip()
+
+        if chart_summary:
+            st.info(chart_summary)
+
+        render_reason_block(
+            "Seed Reasons",
+            split_reason_text(row.get("SeedReasons", "")),
+        )
+        render_reason_block(
+            "Bottoming / Reversal Evidence",
+            split_reason_text(
+                row.get("BottomingReasons", ""),
+                exclude={"Bottoming profile not confirmed"},
+            ),
+        )
+        render_reason_block(
+            "Opportunity Reasons",
+            split_reason_text(row.get("OpportunityReasons", "")),
+        )
+        render_reason_block(
+            "Priority Reasons",
+            split_reason_text(row.get("PriorityReasons", "")),
+        )
+
+    with risk_tab:
+        stop_loss = first_existing_number(
+            row,
+            [
+                "StopLoss",
+                "Stop Loss",
+                "SL",
+            ],
+        )
+        target = first_existing_number(
+            row,
+            [
+                "Target",
+                "TakeProfit",
+                "Take Profit",
+                "TP",
+            ],
+        )
+        cols = st.columns(4)
+        cols[0].metric(
+            "RiskPct",
+            f"{safe_number(row.get('RiskPct', 0)):.2f}%",
+        )
+        cols[1].metric(
+            "RewardPct",
+            f"{safe_number(row.get('RewardPct', 0)):.2f}%",
+        )
+        cols[2].metric(
+            "RR",
+            f"{safe_number(row.get('RR', 0)):.2f}",
+        )
+        cols[3].metric(
+            "Market Quality",
+            f"{market_quality_score:.1f}",
+        )
+
+        cols = st.columns(2)
+        cols[0].metric(
+            "Stop Loss",
+            f"{stop_loss:.2f}" if stop_loss else "N/A",
+        )
+        cols[1].metric(
+            "Target",
+            f"{target:.2f}" if target else "N/A",
+        )
+
+        if market_quality_score < 40:
+            st.warning("Market quality is weak. Use selective sizing.")
+        elif market_quality_score < 60:
+            st.info("Market quality is mixed. Confirm liquidity and risk.")
+
+        render_reason_block(
+            "Expansion Penalties",
+            split_reason_text(
+                row.get("ExpansionReasons", ""),
+                exclude={"Expansion still quiet"},
+            ),
+        )
+
+    with indicators:
+        cols = st.columns(4)
+        cols[0].metric(
+            "RSI",
+            f"{safe_number(row.get('RSI', 0)):.1f}",
+        )
+        cols[1].metric(
+            "RVOL",
+            f"{safe_number(row.get('RVOL', 0)):.2f}",
+        )
+        cols[2].metric(
+            "EMA Compression",
+            f"{safe_number(row.get('EMACompressionPct', 0)):.2f}%",
+        )
+        cols[3].metric(
+            "ATR Percentile 60",
+            f"{safe_number(row.get('ATRPercentile60', 0)):.1f}",
+        )
+
+        cols = st.columns(3)
+        cols[0].metric(
+            "Dry Volume Days",
+            int(safe_number(row.get("DryVolumeDays", 0))),
+        )
+        cols[1].metric(
+            "Base Days",
+            int(safe_number(row.get("BaseDays", 0))),
+        )
+        cols[2].metric(
+            "FreshnessScore",
+            f"{safe_number(row.get('FreshnessScore', 0)):.1f}",
+        )
+
+    with debug:
+        debug_data = pd.DataFrame(
+            [
+                {
+                    "Field": key,
+                    "Value": str(value),
+                }
+                for key, value in row.items()
+            ]
+        )
+        st.dataframe(
+            debug_data,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+
+def opportunity_reason_summary(row):
+
+    reasons = [
+        reason.strip()
+        for reason in str(
+            row.get(
+                "PriorityReasons",
+                "",
+            )
+        ).split(";")
+        if reason.strip()
+    ]
+
+    if not reasons:
+        reasons = [
+            reason.strip()
+            for reason in str(
+                row.get(
+                    "OpportunityReasons",
+                    "",
+                )
+            ).split(";")
+            if reason.strip()
+        ]
+
+    if not reasons:
+        return ""
+
+    priority_terms = [
+        "Seed",
+        "Early",
+        "Breakout",
+        "Momentum",
+        "Penalty",
+        "EMA20",
+        "RVOL",
+        "RR",
+        "RSI",
+        "Previous lifecycle",
+        "Setup",
+        "Market Quality",
+    ]
+    ranked = []
+
+    for reason in reasons:
+        priority = next(
+            (
+                index
+                for index, term in enumerate(priority_terms)
+                if term.upper() in reason.upper()
+            ),
+            len(priority_terms),
+        )
+        ranked.append(
+            (
+                priority,
+                reason,
+            )
+        )
+
+    ranked = sorted(
+        ranked,
+        key=lambda item: item[0],
+    )
+
+    return "; ".join(
+        reason
+        for _, reason in ranked[:2]
+    )
+
+
+def seed_reason_line(row):
+
+    base_days = int(safe_number(row.get("BaseDays", 0)))
+    dry_days = int(safe_number(row.get("DryVolumeDays", 0)))
+    ema_compression = safe_number(row.get("EMACompressionPct", 0))
+
+    parts = []
+
+    if base_days > 0:
+        parts.append(f"Base {base_days}d")
+
+    if dry_days > 0:
+        parts.append(f"Dry {dry_days}d")
+
+    if ema_compression > 0:
+        parts.append(f"EMA {ema_compression:.1f}%")
+
+    if not parts:
+        summary = opportunity_reason_summary(row)
+        return summary or "Seed profile is still forming"
+
+    return " · ".join(parts)
+
+
+def seed_action_label(row):
+
+    action = str(row.get("RecommendedAction", "")).strip()
+
+    return action or "WATCH"
+
+
+def seed_accent(row):
+
+    signal = str(row.get("StrategySignal", "")).upper()
+    action = str(row.get("RecommendedAction", "")).upper()
+    lifecycle = str(row.get("LifecycleState", "")).upper()
+
+    if "SEED BUY" in signal or action in {
+        "STRONG BUY",
+        "BUY",
+    }:
+        return "#22c55e", "rgba(34, 197, 94, 0.10)"
+
+    if "MOMENTUM" in signal or lifecycle == "MOMENTUM":
+        return "#fb923c", "rgba(251, 146, 60, 0.10)"
+
+    if "EXTENDED" in signal or lifecycle == "EXTENDED":
+        return "#f87171", "rgba(248, 113, 113, 0.10)"
+
+    if action == "IGNORE":
+        return "#94a3b8", "rgba(148, 163, 184, 0.08)"
+
+    return "#60a5fa", "rgba(96, 165, 250, 0.10)"
+
+
+def valid_seed_opportunities(opportunities, market=None):
+
+    if opportunities.empty:
+        return opportunities.copy()
+
+    data = opportunities.copy()
+
+    for column in [
+        "Market",
+        "LifecycleState",
+        "StrategySignal",
+        "RecommendedAction",
+    ]:
+        if column not in data.columns:
+            data[column] = ""
+
+    rank_column = (
+        "PriorityRank"
+        if "PriorityRank" in data.columns
+        else "OpportunityRank"
+        if "OpportunityRank" in data.columns
+        else None
+    )
+    score_column = (
+        "PriorityScore"
+        if "PriorityScore" in data.columns
+        else "OpportunityScore"
+        if "OpportunityScore" in data.columns
+        else "SeedScore"
+    )
+    lifecycle = data["LifecycleState"].astype(str).str.upper()
+    signal = data["StrategySignal"].astype(str).str.upper()
+    action = data["RecommendedAction"].astype(str).str.upper()
+    mask = (
+        (lifecycle == "SEED")
+        & ~signal.str.contains(
+            "MOMENTUM|EXTENDED|SKIP",
+            regex=True,
+            na=False,
+        )
+        & (action != "IGNORE")
+    )
+
+    if market:
+        mask = mask & (
+            data["Market"].astype(str).str.upper()
+            == str(market).upper()
+        )
+
+    valid = data[mask].copy()
+
+    if valid.empty:
+        return valid
+
+    if rank_column:
+        valid["_seed_rank_sort"] = pd.to_numeric(
+            valid[rank_column],
+            errors="coerce",
+        ).fillna(999999)
+    else:
+        valid["_seed_rank_sort"] = 999999
+
+    valid["_seed_score_sort"] = pd.to_numeric(
+        valid[score_column],
+        errors="coerce",
+    ).fillna(0)
+
+    return valid.sort_values(
+        [
+            "_seed_rank_sort",
+            "_seed_score_sort",
+        ],
+        ascending=[
+            True,
+            False,
+        ],
+    )
+
+
+def top_seed_opportunities(opportunities, market, limit=5):
+
+    return valid_seed_opportunities(
+        opportunities,
+        market=market,
+    ).head(limit)
+
+
+def seed_badges(row):
+
+    badges = []
+    pattern = str(row.get("PatternName", "")).strip()
+    setup = str(row.get("StrategySetup", "")).strip()
+    lifecycle = str(row.get("LifecycleState", "")).strip()
+
+    for value in [
+        pattern,
+        "Bottoming" if "BOTTOM" in setup.upper() else "",
+        lifecycle.title() if lifecycle else "Seed",
+    ]:
+        if value and value not in badges:
+            badges.append(value)
+
+    return badges[:3]
+
+
+def compact_symbol_title(row):
+
+    rank = int(
+        safe_number(
+            row.get(
+                "PriorityRank",
+                row.get("OpportunityRank", 0),
+            )
+        )
+    )
+
+    if rank > 0:
+        return f"#{rank} {row.get('Symbol', '')}"
+
+    return str(row.get("Symbol", ""))
+
+
+def render_seed_card(row):
+
+    accent, background = seed_accent(row)
+    symbol = html.escape(str(row.get("Symbol", "")))
+    action = html.escape(seed_action_label(row))
+    seed_score = safe_number(row.get("SeedScore", 0))
+    fresh = safe_number(row.get("FreshnessScore", 0))
+    expansion = safe_number(row.get("ExpansionScore", 0))
+    risk = safe_number(row.get("RiskPct", 0))
+    reason = html.escape(seed_reason_line(row))
+    badges = "".join(
+        f"<span>{html.escape(str(badge))}</span>"
+        for badge in seed_badges(row)
+    )
+
+    st.markdown(
+        f"""
+        <div class="ra-seed-card" style="--seed-accent: {accent}; --seed-bg: {background};">
+            <div class="ra-seed-top">
+                <span class="ra-seed-symbol">{symbol}</span>
+                <span class="ra-seed-action">{action}</span>
+                <span class="ra-seed-score">Seed {seed_score:.0f}</span>
+            </div>
+            <div class="ra-seed-badges">{badges}</div>
+            <div class="ra-seed-chips">
+                <span>Fresh {fresh:.0f}</span>
+                <span>Exp {expansion:.0f}</span>
+                <span>Risk {risk:.1f}%</span>
+            </div>
+            <div class="ra-seed-reason">{reason}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_seed_market_section(seed_opportunities, market):
+
+    st.markdown(f"**🌱 Top 5 {market} Seed**")
+
+    rows = top_seed_opportunities(
+        seed_opportunities,
+        market,
+        limit=5,
+    )
+
+    if rows.empty:
+        st.info("No valid SEED opportunities for this market.")
+        return rows
+
+    for _, row in rows.iterrows():
+        render_seed_card(row)
+
+    return rows
+
+
+def render_seed_detail_table(seed_rows):
+
+    if seed_rows.empty:
+        return
+
+    detail = seed_rows.copy()
+    rank_source = (
+        "PriorityRank"
+        if "PriorityRank" in detail.columns
+        else "OpportunityRank"
+        if "OpportunityRank" in detail.columns
+        else None
+    )
+
+    if rank_source:
+        detail["Rank"] = detail[rank_source]
+    else:
+        detail["Rank"] = range(
+            1,
+            len(detail) + 1,
+        )
+
+    columns = [
+        column
+        for column in SEED_DETAIL_COLUMNS
+        if column in detail.columns
+    ]
+
+    if not columns:
+        return
+
+    with st.expander("Detailed Seed Table", expanded=False):
+        st.dataframe(
+            detail[columns],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+
+def pattern_distribution(seed_rows):
+
+    if seed_rows.empty or "PatternName" not in seed_rows.columns:
+        return {
+            "VCP": 0,
+            "Flat Base": 0,
+            "Ascending Base": 0,
+            "Other": 0,
+        }
+
+    patterns = seed_rows["PatternName"].fillna("").astype(str).str.upper()
+    vcp = int(patterns.str.contains("VCP", regex=False).sum())
+    flat = int(patterns.str.contains("FLAT BASE", regex=False).sum())
+    ascending = int(
+        patterns.str.contains("ASCENDING BASE", regex=False).sum()
+    )
+    other = max(
+        0,
+        len(seed_rows) - vcp - flat - ascending,
+    )
+
+    return {
+        "VCP": vcp,
+        "Flat Base": flat,
+        "Ascending Base": ascending,
+        "Other": other,
+    }
+
+
+def ai_opinion_from_metrics(row):
+
+    lifecycle = str(row.get("LifecycleState", "")).upper()
+    expansion = safe_number(row.get("ExpansionScore", 0))
+    seed = safe_number(row.get("SeedScore", 0))
+    fresh = safe_number(row.get("FreshnessScore", 0))
+    rvol = safe_number(row.get("RVOL", 0))
+
+    if lifecycle in {
+        "MOMENTUM",
+        "EXTENDED",
+    } or expansion >= 70:
+        return "This stock is becoming extended. Wait for another base."
+
+    if seed >= 75 and fresh >= 75 and expansion <= 25:
+        return "This stock is still inside institutional accumulation. Momentum has not started yet."
+
+    if seed >= 70 and rvol < 1:
+        return "The base is forming, but volume has not confirmed accumulation yet."
+
+    if seed >= 70 and expansion <= 40:
+        return "This setup is early, but still needs confirmation before expansion."
+
+    return "This setup needs more evidence before it becomes a priority."
+
+
+def expected_next_step(row):
+
+    lifecycle = str(row.get("LifecycleState", "")).upper()
+    expansion = safe_number(row.get("ExpansionScore", 0))
+    seed = safe_number(row.get("SeedScore", 0))
+    fresh = safe_number(row.get("FreshnessScore", 0))
+    rvol = safe_number(row.get("RVOL", 0))
+
+    if lifecycle in {
+        "EXTENDED",
+        "MOMENTUM",
+    } or expansion >= 70:
+        return "Wait for next base"
+
+    if seed >= 78 and fresh >= 70 and expansion <= 25 and rvol >= 1:
+        return "Watch for breakout"
+
+    if seed >= 72 and expansion <= 25 and rvol < 1:
+        return "Needs more volume"
+
+    if seed >= 72 and expansion <= 35:
+        return "Continue Accumulating"
+
+    return "Needs more confirmation"
+
+
+def meter_blocks(value, maximum=100, inverse=False):
+
+    value = safe_number(value)
+    maximum = max(
+        safe_number(maximum),
+        1,
+    )
+    ratio = max(
+        0,
+        min(
+            1,
+            value / maximum,
+        ),
+    )
+    fill_ratio = 1 - ratio if inverse else ratio
+    filled = int(round(fill_ratio * 10))
+
+    return "█" * filled + "░" * (10 - filled)
+
+
+def timeline_level(row, stage):
+
+    lifecycle = str(row.get("LifecycleState", "")).upper()
+    expansion = safe_number(row.get("ExpansionScore", 0))
+    seed = safe_number(row.get("SeedScore", 0))
+    fresh = safe_number(row.get("FreshnessScore", 0))
+
+    if stage == "Sleeping":
+        return max(
+            0,
+            10 - int(min(seed, 100) / 12),
+        )
+
+    if stage == "Accumulating":
+        return int(min(max(seed, 0), 100) / 10)
+
+    if stage == "Ignition":
+        return int(min(max(fresh, 0), 100) / 25)
+
+    if stage == "Breakout":
+        return 8 if lifecycle == "BREAKOUT" else int(min(expansion, 100) / 18)
+
+    if stage == "Momentum":
+        return 9 if lifecycle in {"MOMENTUM", "EXTENDED"} else int(min(expansion, 100) / 20)
+
+    return 0
+
+
+def render_seed_timeline(row):
+
+    st.markdown("**Seed Timeline**")
+    lines = []
+
+    for stage in [
+        "Sleeping",
+        "Accumulating",
+        "Ignition",
+        "Breakout",
+        "Momentum",
+    ]:
+        level = max(
+            0,
+            min(
+                10,
+                timeline_level(row, stage),
+            ),
+        )
+        lines.append(
+            f"{stage:<13} {'■' * level}{'□' * (10 - level)}"
+        )
+
+    st.code("\n".join(lines))
+
+
+def render_ai_pick_today(seed_opportunities, quality):
+
+    valid = valid_seed_opportunities(seed_opportunities)
+
+    st.markdown(
+        """
+        <style>
+        .ra-ai-pick {
+            border: 1px solid rgba(96, 165, 250, 0.26);
+            border-left: 5px solid #60a5fa;
+            border-radius: 12px;
+            padding: 16px 18px;
+            background: linear-gradient(135deg, rgba(96, 165, 250, 0.14), rgba(15, 23, 42, 0.18));
+            margin: 0.2rem 0 1rem 0;
+        }
+        .ra-ai-pick-label {
+            font-size: 0.74rem;
+            opacity: 0.72;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+        .ra-ai-pick-main {
+            display: flex;
+            align-items: baseline;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-top: 6px;
+        }
+        .ra-ai-pick-symbol {
+            font-size: 1.55rem;
+            font-weight: 800;
+        }
+        .ra-ai-pick-action {
+            color: #60a5fa;
+            font-size: 0.85rem;
+            font-weight: 800;
+            text-transform: uppercase;
+        }
+        .ra-ai-pick-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 10px;
+        }
+        .ra-ai-pick-meta span {
+            border: 1px solid rgba(148, 163, 184, 0.22);
+            border-radius: 999px;
+            padding: 3px 8px;
+            font-size: 0.76rem;
+            opacity: 0.9;
+        }
+        .ra-ai-pick-why {
+            margin-top: 12px;
+            font-size: 0.82rem;
+            opacity: 0.78;
+        }
+        .ra-ai-pick-why ul {
+            margin: 6px 0 0 1rem;
+            padding: 0;
+        }
+        .ra-ai-opinion {
+            margin-top: 10px;
+            font-size: 0.82rem;
+            opacity: 0.88;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if valid.empty:
+        market_note = ""
+
+        if quality is not None and not quality.empty:
+            avg_quality = safe_number(quality["QualityScore"].mean())
+            market_note = f" Market quality score: {avg_quality:.1f}."
+
+        st.info(
+            "No high-quality Seed candidate today. "
+            f"Market quality is weak.{market_note}"
+        )
+        return None
+
+    row = valid.iloc[0]
+    symbol = html.escape(str(row.get("Symbol", "")))
+    action = html.escape(seed_action_label(row))
+    seed_score = safe_number(row.get("SeedScore", 0))
+    pattern = html.escape(str(row.get("PatternName", "") or "Seed"))
+    confidence = safe_number(row.get("Confidence", 0))
+    fresh = safe_number(row.get("FreshnessScore", 0))
+    expansion = safe_number(row.get("ExpansionScore", 0))
+    rr = safe_number(row.get("RR", 0))
+    setup = str(row.get("StrategySetup", "Seed")).strip() or "Seed"
+    reason_parts = [
+        setup,
+        "Dry volume"
+        if safe_number(row.get("DryVolumeDays", 0)) > 0
+        else "",
+        f"Base {int(safe_number(row.get('BaseDays', 0)))} days"
+        if safe_number(row.get("BaseDays", 0)) > 0
+        else "",
+        "EMA compression"
+        if safe_number(row.get("EMACompressionPct", 0)) > 0
+        else "",
+        "Expansion still very low"
+        if expansion <= 25
+        else "Expansion risk rising",
+    ]
+    reason_items = "".join(
+        f"<li>{html.escape(reason)}</li>"
+        for reason in reason_parts
+        if reason
+    )
+    opinion = html.escape(ai_opinion_from_metrics(row))
+
+    st.markdown(
+        f"""
+        <div class="ra-ai-pick">
+            <div class="ra-ai-pick-label">AI Pick Today</div>
+            <div class="ra-ai-pick-main">
+                <span class="ra-ai-pick-symbol">{symbol}</span>
+                <span class="ra-ai-pick-action">{action}</span>
+            </div>
+            <div class="ra-ai-pick-meta">
+                <span>Seed {seed_score:.0f}</span>
+                <span>Pattern {pattern}</span>
+                <span>Confidence {confidence:.0f}%</span>
+                <span>Freshness {fresh:.0f}%</span>
+                <span>RR {rr:.1f}</span>
+            </div>
+            <div class="ra-ai-pick-why"><strong>Why this stock?</strong><ul>{reason_items}</ul></div>
+            <div class="ra-ai-opinion">{opinion}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    return row
+
+
+def render_seed_summary_cards(seed_opportunities):
+
+    valid = valid_seed_opportunities(seed_opportunities)
+    best = valid.iloc[0] if not valid.empty else None
+    pattern_counts = pattern_distribution(valid)
+    seed_buy = int(
+        (
+            valid["StrategySignal"]
+            .astype(str)
+            .str.upper()
+            == "SEED BUY"
+        ).sum()
+    ) if not valid.empty and "StrategySignal" in valid.columns else 0
+    seed_watch = int(
+        (
+            valid["StrategySignal"]
+            .astype(str)
+            .str.upper()
+            == "SEED WATCH"
+        ).sum()
+    ) if not valid.empty and "StrategySignal" in valid.columns else 0
+
+    st.subheader("Seed Summary")
+    cols = st.columns(4)
+    cols[0].metric(
+        "Best Seed Today",
+        str(best.get("Symbol", "N/A")) if best is not None else "N/A",
+    )
+    cols[1].metric(
+        "Best Pattern",
+        str(best.get("PatternName", "N/A")) if best is not None else "N/A",
+    )
+    cols[2].metric("SEED BUY", seed_buy)
+    cols[3].metric("SEED WATCH", seed_watch)
+
+    cols = st.columns(4)
+    cols[0].metric(
+        "Avg SeedScore",
+        f"{safe_number(valid['SeedScore'].mean()):.1f}"
+        if not valid.empty and "SeedScore" in valid.columns
+        else "0.0",
+    )
+    cols[1].metric(
+        "Avg Freshness",
+        f"{safe_number(valid['FreshnessScore'].mean()):.1f}"
+        if not valid.empty and "FreshnessScore" in valid.columns
+        else "0.0",
+    )
+    cols[2].metric(
+        "Avg Expansion",
+        f"{safe_number(valid['ExpansionScore'].mean()):.1f}"
+        if not valid.empty and "ExpansionScore" in valid.columns
+        else "0.0",
+    )
+    cols[3].metric(
+        "Avg Base Days",
+        f"{safe_number(valid['BaseDays'].mean()):.0f}"
+        if not valid.empty and "BaseDays" in valid.columns
+        else "0",
+    )
+
+    cols = st.columns(4)
+    cols[0].metric("VCP", pattern_counts["VCP"])
+    cols[1].metric("Flat Base", pattern_counts["Flat Base"])
+    cols[2].metric("Ascending Base", pattern_counts["Ascending Base"])
+    cols[3].metric("Other", pattern_counts["Other"])
+
+
+def render_opportunity_or_seed_summary(opportunities, seed_opportunities):
+
+    mode = current_strategy_mode(opportunities)
+
+    if "PURE EARLY" in mode.upper():
+        render_seed_summary_cards(seed_opportunities)
+        return
+
+    render_opportunity_summary_cards(opportunities)
+
+
+def render_top_seed_sections(opportunities):
+
+    st.markdown(
+        """
+        <style>
+        .ra-seed-card {
+            border: 1px solid rgba(148, 163, 184, 0.22);
+            border-left: 3px solid var(--seed-accent);
+            border-radius: 8px;
+            background: var(--seed-bg);
+            padding: 8px 10px;
+            margin: 0 0 7px 0;
+        }
+        .ra-seed-top {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            justify-content: space-between;
+            line-height: 1.05;
+        }
+        .ra-seed-symbol {
+            font-weight: 750;
+            font-size: 0.92rem;
+        }
+        .ra-seed-action {
+            color: var(--seed-accent);
+            font-size: 0.68rem;
+            font-weight: 750;
+            text-transform: uppercase;
+            white-space: nowrap;
+        }
+        .ra-seed-score {
+            font-size: 0.76rem;
+            font-weight: 700;
+            opacity: 0.92;
+            white-space: nowrap;
+        }
+        .ra-seed-badges {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 5px;
+        }
+        .ra-seed-badges span {
+            border: 1px solid rgba(148, 163, 184, 0.20);
+            border-radius: 999px;
+            padding: 1px 6px;
+            font-size: 0.66rem;
+            opacity: 0.92;
+        }
+        .ra-seed-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 5px;
+        }
+        .ra-seed-chips span {
+            border: 1px solid rgba(148, 163, 184, 0.24);
+            border-radius: 999px;
+            padding: 1px 6px;
+            font-size: 0.66rem;
+            opacity: 0.94;
+        }
+        .ra-seed-secondary span {
+            opacity: 0.72;
+        }
+        .ra-seed-reason {
+            margin-top: 5px;
+            font-size: 0.70rem;
+            opacity: 0.70;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("#### Top 5 Seed Opportunities")
+    cols = st.columns(2)
+
+    with cols[0]:
+        set_rows = render_seed_market_section(
+            opportunities,
+            "SET",
+        )
+
+    with cols[1]:
+        usa_rows = render_seed_market_section(
+            opportunities,
+            "USA",
+        )
+
+    seed_rows = pd.concat(
+        [
+            set_rows,
+            usa_rows,
+        ],
+        ignore_index=True,
+    )
+    render_seed_detail_table(seed_rows)
+
+
+def render_opportunity_summary_cards(opportunities):
+
+    st.subheader("Opportunity Summary")
+
+    top = (
+        opportunities.sort_values(
+            [
+                "PriorityRank"
+                if "PriorityRank" in opportunities.columns
+                else "OpportunityRank",
+                "PriorityScore"
+                if "PriorityScore" in opportunities.columns
+                else "OpportunityScore",
+            ],
+            ascending=[
+                True,
+                False,
+            ],
+        ).iloc[0]
+        if not opportunities.empty
+        else None
+    )
+    top_label = (
+        f"{top['Symbol']} ({safe_number(top.get('PriorityScore', top.get('OpportunityScore', 0))):.2f})"
+        if top is not None
+        else "N/A"
+    )
+    cols = st.columns(5)
+    cols[0].metric(
+        "Top Opportunity",
+        top_label,
+    )
+    cols[1].metric(
+        "Strong Buy Count",
+        int(
+            (
+                opportunities["RecommendedAction"] == "Strong Buy"
+            ).sum()
+        ),
+    )
+    cols[2].metric(
+        "Buy Count",
+        int(
+            (
+                opportunities["RecommendedAction"] == "Buy"
+            ).sum()
+        ),
+    )
+    cols[3].metric(
+        "Watch Closely Count",
+        int(
+            (
+                opportunities["RecommendedAction"] == "Watch Closely"
+            ).sum()
+        ),
+    )
+    cols[4].metric(
+        "Watch Count",
+        int(
+            (
+                opportunities["RecommendedAction"] == "Watch"
+            ).sum()
+        ),
+    )
+
+    cols = st.columns(3)
+    cols[0].metric(
+        "Avg Opportunity Score",
+        f"{safe_number(opportunities['OpportunityScore'].mean()):.2f}"
+        if not opportunities.empty
+        else "0.00",
+    )
+    cols[1].metric(
+        "SET Opportunities",
+        int(
+            (
+                opportunities["Market"] == "SET"
+            ).sum()
+        ),
+    )
+    cols[2].metric(
+        "USA Opportunities",
+        int(
+            (
+                opportunities["Market"] == "USA"
+            ).sum()
+        ),
+    )
+
+
+def opportunity_filter_values(df, column):
+
+    if column not in df.columns:
+        return [
+            "ALL",
+        ]
+
+    values = sorted(
+        [
+            str(value)
+            for value in df[column].dropna().unique().tolist()
+            if str(value)
+        ]
+    )
+
+    return [
+        "ALL",
+    ] + values
+
+
+def apply_opportunity_filters(
+    opportunities,
+    market_filter,
+    action_filter,
+    grade_filter,
+    lifecycle_filter,
+    min_score,
+    state_changed_only,
+    symbol_search,
+    top_50_only=True,
+):
+
+    data = opportunities.copy()
+
+    if market_filter != "ALL":
+        data = data[data["Market"] == market_filter]
+
+    if action_filter and "ALL" not in action_filter:
+        data = data[
+            data["RecommendedAction"].isin(action_filter)
+        ]
+
+    if grade_filter and "ALL" not in grade_filter:
+        data = data[
+            data["OpportunityGrade"].isin(grade_filter)
+        ]
+
+    if lifecycle_filter and "ALL" not in lifecycle_filter:
+        data = data[
+            data["LifecycleState"].isin(lifecycle_filter)
+        ]
+
+    data = data[
+        data["OpportunityScore"] >= min_score
+    ]
+
+    if state_changed_only:
+        data = data[data["StateChanged"]]
+
+    symbol_search = symbol_search.strip().upper()
+
+    if symbol_search:
+        data = data[
+            data["Symbol"]
+            .astype(str)
+            .str.upper()
+            .str.contains(
+                symbol_search,
+                regex=False,
+            )
+        ]
+
+    rank_column = (
+        "PriorityRank"
+        if "PriorityRank" in data.columns
+        else "OpportunityRank"
+    )
+    score_column = (
+        "PriorityScore"
+        if "PriorityScore" in data.columns
+        else "OpportunityScore"
+    )
+    data = data.sort_values(
+        [
+            rank_column,
+            score_column,
+        ],
+        ascending=[
+            True,
+            False,
+        ],
+    )
+
+    if top_50_only:
+        return data.head(50)
+
+    return data
+
+
+def priority_badge(row, display_rank):
+
+    action = str(
+        row.get(
+            "PriorityAction",
+            row.get("RecommendedAction", ""),
+        )
+    ).upper()
+
+    if display_rank == 1:
+        return "TOP PICK"
+
+    if "HIGH" in action or "REVIEW FIRST" in action:
+        return "A+"
+
+    if "WATCH" in action:
+        return "HIGH"
+
+    return "QUEUE"
+
+
+def render_buy_queue(opportunities):
+
+    st.subheader("Buy Queue")
+    st.caption("If you can buy only 5 today, review these first.")
+
+    preferred = opportunities[
+        opportunities.get(
+            "PriorityAction",
+            pd.Series("", index=opportunities.index),
+        ).isin(
+            [
+                "Review First",
+                "High Priority",
+                "Watch Closely",
+            ]
+        )
+    ].copy()
+    queue = preferred if not preferred.empty else opportunities.copy()
+    rank_column = (
+        "PriorityRank"
+        if "PriorityRank" in queue.columns
+        else "OpportunityRank"
+    )
+    score_column = (
+        "PriorityScore"
+        if "PriorityScore" in queue.columns
+        else "OpportunityScore"
+    )
+    queue = queue.sort_values(
+        [
+            rank_column,
+            score_column,
+        ],
+        ascending=[
+            True,
+            False,
+        ],
+    ).head(5).copy()
+
+    if queue.empty:
+        st.info("No buy queue candidates")
+        return
+
+    queue["Reason Summary"] = queue.apply(
+        opportunity_reason_summary,
+        axis=1,
+    )
+    st.markdown(
+        """
+        <style>
+        .ra-queue-card {
+            border: 1px solid rgba(148, 163, 184, 0.20);
+            border-radius: 8px;
+            padding: 9px 11px;
+            margin-bottom: 8px;
+            background: rgba(15, 23, 42, 0.22);
+        }
+        .ra-queue-title {
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+            align-items: center;
+        }
+        .ra-queue-symbol {
+            font-weight: 780;
+            font-size: 0.95rem;
+        }
+        .ra-queue-badge {
+            border: 1px solid rgba(96, 165, 250, 0.30);
+            border-radius: 999px;
+            padding: 2px 8px;
+            color: #93c5fd;
+            font-size: 0.68rem;
+            font-weight: 800;
+            letter-spacing: 0.03em;
+        }
+        .ra-queue-meta {
+            font-size: 0.78rem;
+            opacity: 0.82;
+            margin-top: 4px;
+        }
+        .ra-queue-reason {
+            font-size: 0.75rem;
+            opacity: 0.70;
+            margin-top: 5px;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    for display_rank, (_, row) in enumerate(
+        queue.iterrows(),
+        start=1,
+    ):
+        symbol = html.escape(str(row.get("Symbol", "")))
+        badge = html.escape(priority_badge(row, display_rank))
+        seed_score = safe_number(row.get("SeedScore", 0))
+        priority_score = safe_number(row.get("PriorityScore", 0))
+        rr = safe_number(row.get("RR", 0))
+        fresh = safe_number(row.get("FreshnessScore", 0))
+        expansion = safe_number(row.get("ExpansionScore", 0))
+        pattern = str(row.get("PatternName", "")).strip()
+        setup = str(row.get("StrategySetup", "")).strip()
+        dry_days = int(safe_number(row.get("DryVolumeDays", 0)))
+        reason_parts = [
+            part
+            for part in [
+                setup,
+                pattern,
+                f"Dry volume {dry_days}d" if dry_days else "",
+            ]
+            if part
+        ]
+        reason = html.escape(
+            " · ".join(reason_parts)
+            or str(row.get("Reason Summary", ""))
+        )
+
+        st.markdown(
+            f"""
+            <div class="ra-queue-card">
+                <div class="ra-queue-title">
+                    <span class="ra-queue-symbol">#{display_rank} {symbol}</span>
+                    <span class="ra-queue-badge">{badge}</span>
+                </div>
+                <div class="ra-queue-meta">Seed {seed_score:.0f} · Priority {priority_score:.1f}</div>
+                <div class="ra-queue-meta">RR {rr:.1f} · Fresh {fresh:.0f} · Exp {expansion:.0f}</div>
+                <div class="ra-queue-reason"><strong>Reason:</strong> {reason}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    columns = [
+        "PriorityRank"
+        if "PriorityRank" in queue.columns
+        else "OpportunityRank",
+        "Symbol",
+        "Market",
+        "PriorityScore"
+        if "PriorityScore" in queue.columns
+        else "OpportunityScore",
+        "PriorityAction"
+        if "PriorityAction" in queue.columns
+        else "RecommendedAction",
+        "RecommendedAction",
+        "Reason Summary",
+    ]
+    columns = [
+        column
+        for column in columns
+        if column in queue.columns
+    ]
+
+    with st.expander("Detailed Buy Queue", expanded=False):
+        st.dataframe(
+            queue[columns],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+
+def render_opportunity_export():
+
+    if not OPPORTUNITY_RESULT_FILE.exists():
+        st.info("Run Scanner first to create output/opportunity_results.csv")
+        return
+
+    st.download_button(
+        "Export Today's Opportunities",
+        data=OPPORTUNITY_RESULT_FILE.read_bytes(),
+        file_name="opportunity_results.csv",
+        mime="text/csv",
+    )
+    st.caption(str(OPPORTUNITY_RESULT_FILE))
+
+    if PRIORITY_RESULT_FILE.exists():
+        st.download_button(
+            "Export Priority Results",
+            data=PRIORITY_RESULT_FILE.read_bytes(),
+            file_name="priority_results.csv",
+            mime="text/csv",
+        )
+        st.caption(str(PRIORITY_RESULT_FILE))
+
+
+def render_opportunity_add_to_watchlist(row):
+
+    with st.form("opportunity_add_watchlist_form"):
+        note = st.text_input(
+            "Watchlist Note",
+            value=opportunity_reason_summary(row),
+        )
+        stop_loss = st.number_input(
+            "Stop Loss",
+            min_value=0.0,
+            value=first_existing_number(
+                row,
+                [
+                    "StopLoss",
+                    "Stop Loss",
+                    "SL",
+                ],
+            ),
+            step=0.01,
+            key="opportunity_stop_loss",
+        )
+        target = st.number_input(
+            "Target",
+            min_value=0.0,
+            value=first_existing_number(
+                row,
+                [
+                    "Target",
+                    "TakeProfit",
+                    "Take Profit",
+                    "TP",
+                ],
+            ),
+            step=0.01,
+            key="opportunity_target",
+        )
+        submitted = st.form_submit_button(
+            "Add Opportunity to Watchlist"
+        )
+
+    if not submitted:
+        return
+
+    add_to_watchlist(
+        row["Symbol"],
+        row["Market"],
+        price=safe_number(row.get("Price", 0.0)),
+        setup=row.get("Setup", ""),
+        score=safe_number(row.get("Score", 0.0)),
+        signal=row.get("Signal", ""),
+        strategy_mode=row.get("StrategyMode", "Standard"),
+        strategy_setup=row.get("StrategySetup", row.get("Setup", "")),
+        strategy_score=safe_number(
+            row.get(
+                "StrategyScore",
+                row.get("Score", 0.0),
+            )
+        ),
+        strategy_signal=row.get("StrategySignal", row.get("Signal", "")),
+        lifecycle_state=row.get("LifecycleState", "UNKNOWN"),
+        previous_lifecycle_state=row.get(
+            "PreviousLifecycleState",
+            "UNKNOWN",
+        ),
+        days_in_state=safe_number(row.get("DaysInState", 0)),
+        state_changed=row.get("StateChanged", False),
+        opportunity_score=safe_number(row.get("OpportunityScore", 0)),
+        opportunity_grade=row.get("OpportunityGrade", ""),
+        confidence=safe_number(row.get("Confidence", 0)),
+        recommended_action=row.get("RecommendedAction", ""),
+        opportunity_reasons=row.get("OpportunityReasons", ""),
+        stop_loss=stop_loss,
+        target=target,
+        note=note,
+    )
+    st.success(f"Added {row['Symbol']} opportunity to Watchlist")
+
+
+def render_todays_opportunities(
+    opportunities,
+    quality,
+    opportunity_path=None,
+    is_fallback=False,
+):
+
+    st.subheader("Today's Opportunities")
+
+    if is_fallback:
+        st.warning(
+            "No opportunity results found. Falling back to scanner results. "
+            "Run Scanner first to create output/opportunity_results.csv."
+        )
+
+    if opportunities.empty:
+        if opportunity_path is None:
+            st.info("No opportunity results found. Run Scanner first.")
+        else:
+            st.info("No opportunities found for current filters.")
+        return
+
+    opportunities = prepare_data(opportunities)
+    lifecycle = load_lifecycle()
+    ai_recommendation = recommend_priority_mode(
+        quality,
+        lifecycle,
+        opportunities,
+    )
+
+    st.markdown("**Priority Mode**")
+    c1, c2 = st.columns([1, 2])
+    selected_priority_mode = c1.selectbox(
+        "Priority Mode",
+        PRIORITY_UI_OPTIONS,
+        index=0,
+        label_visibility="collapsed",
+        key="priority_mode_select",
+    )
+    effective_priority_mode = (
+        ai_recommendation.get(
+            "AIRecommendedPriority",
+            "Seed First",
+        )
+        if selected_priority_mode == "AI Recommended"
+        else selected_priority_mode
+    )
+    c2.metric(
+        "AI Recommended Priority",
+        ai_recommendation.get(
+            "AIRecommendedPriority",
+            "N/A",
+        ),
+    )
+    st.caption(
+        "AI Recommended Priority: "
+        f"{ai_recommendation.get('AIRecommendedPriority', 'N/A')}"
+    )
+    reason = ai_recommendation.get(
+        "AIRecommendationReason",
+        "",
+    )
+    if selected_priority_mode == "AI Recommended" and reason:
+        st.info(reason)
+
+    opportunities = apply_priority_mode(
+        opportunities,
+        effective_priority_mode,
+        market_quality_df=quality,
+        lifecycle_df=lifecycle,
+        ai_recommended_priority=ai_recommendation.get(
+            "AIRecommendedPriority",
+            effective_priority_mode,
+        ),
+        ai_recommendation_reason=reason,
+    )
+    opportunities = ensure_priority_columns(
+        opportunities,
+        effective_priority_mode,
+        quality=quality,
+        lifecycle=lifecycle,
+        ai_recommendation=ai_recommendation,
+    )
+    priority_results, _, priority_missing = load_priority_results_from_disk()
+    seed_opportunities = (
+        priority_results.copy()
+        if not priority_missing and not priority_results.empty
+        else opportunities.copy()
+    )
+    render_ai_pick_today(
+        seed_opportunities,
+        quality,
+    )
+    render_opportunity_or_seed_summary(
+        opportunities,
+        seed_opportunities,
+    )
+    render_top_seed_sections(seed_opportunities)
+    render_buy_queue(seed_opportunities)
+    render_opportunity_export()
+    render_opportunity_debug(
+        opportunities,
+        opportunity_path,
+        is_fallback=is_fallback,
+    )
+    render_priority_debug(
+        opportunities,
+        effective_priority_mode,
+        ai_recommendation,
+    )
+
+    with st.expander("Opportunity Filters", expanded=False):
+        c1, c2 = st.columns(2)
+        market_filter = c1.selectbox(
+            "Market",
+            [
+                "ALL",
+                "SET",
+                "USA",
+            ],
+            key="opportunity_market_filter",
+        )
+        action_filter = c2.multiselect(
+            "Recommended Action",
+            OPPORTUNITY_ACTIONS,
+            default=[
+                "ALL",
+            ],
+            key="opportunity_action_filter",
+        )
+
+        c1, c2 = st.columns(2)
+        grade_filter = c1.multiselect(
+            "Opportunity Grade",
+            opportunity_filter_values(
+                opportunities,
+                "OpportunityGrade",
+            ),
+            default=[
+                "ALL",
+            ],
+            key="opportunity_grade_filter",
+        )
+        lifecycle_filter = c2.multiselect(
+            "Lifecycle State",
+            LIFECYCLE_STATES,
+            default=[
+                "ALL",
+            ],
+            key="opportunity_lifecycle_filter",
+        )
+
+        c1, c2 = st.columns(2)
+        min_score = c1.slider(
+            "Min Opportunity Score",
+            min_value=0,
+            max_value=100,
+            value=0,
+            step=1,
+            key="opportunity_min_score",
+        )
+        symbol_search = c2.text_input(
+            "Search Symbol",
+            value="",
+            placeholder="AAPL, PTT, DUK",
+            key="opportunity_symbol_search",
+        )
+
+        c1, c2 = st.columns(2)
+        top_50_only = c1.checkbox(
+            "Show top 50 opportunities only",
+            value=True,
+            key="opportunity_top_50_only",
+        )
+        state_changed_only = c2.checkbox(
+            "State Changed Only",
+            value=False,
+            key="opportunity_state_changed_only",
+        )
+
+    filtered = apply_opportunity_filters(
+        opportunities,
+        market_filter,
+        action_filter,
+        grade_filter,
+        lifecycle_filter,
+        min_score,
+        state_changed_only,
+        symbol_search,
+        top_50_only=top_50_only,
+    )
+
+    if filtered.empty:
+        st.info("No opportunities found for current filters.")
+        return
+
+    st.caption(
+        f"Showing {len(filtered):,} of {len(opportunities):,} opportunities"
+    )
+
+    display_columns = opportunity_display_columns(
+        filtered
+    )
+
+    with st.expander("Sortable Opportunity Table", expanded=False):
+        render_opportunity_overview_table(filtered)
+        st.dataframe(
+            filtered[display_columns],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    labels = [
+        (
+            f"#{int(row.get('PriorityRank', row.get('OpportunityRank', 0)))} | "
+            f"{row['Symbol']} | {row['Market']} | "
+            f"Priority {safe_number(row.get('PriorityScore', row.get('OpportunityScore', 0))):.2f}"
+        )
+        for _, row in filtered.iterrows()
+    ]
+    selected = st.selectbox(
+        "Opportunity Detail",
+        labels,
+        key="opportunity_detail_select",
+    )
+    row = selected_opportunity_row(
+        filtered,
+        selected,
+    )
+
+    render_opportunity_details(
+        row,
+        market_quality_for_row(
+            row,
+            quality,
+        ),
+    )
+    render_opportunity_add_to_watchlist(row)
+
+
 def build_market_summary(df):
 
     rows = []
@@ -682,6 +3978,22 @@ def build_market_summary(df):
             "Stocks": len(data),
             "BUY": int((data["_signal_group"] == "BUY").sum()),
             "WATCH": int((data["_signal_group"] == "WATCH").sum()),
+            "Seed Buy Count": int(
+                (
+                    data["StrategySignal"]
+                    .astype(str)
+                    .str.upper()
+                    == "SEED BUY"
+                ).sum()
+            ),
+            "Seed Watch Count": int(
+                (
+                    data["StrategySignal"]
+                    .astype(str)
+                    .str.upper()
+                    == "SEED WATCH"
+                ).sum()
+            ),
             "EARLY": int((data["_signal_group"] == "EARLY").sum()),
             "EXTENDED": int((data["_signal_group"] == "EXTENDED").sum()),
             "SKIP": int((data["_signal_group"] == "SKIP").sum()),
@@ -709,6 +4021,32 @@ def render_summary(df):
         data = summary[summary["Market"] == market].iloc[0]
 
         with metric_cols[index]:
+            seed_total = int(
+                data.get(
+                    "Seed Buy Count",
+                    0,
+                )
+            ) + int(
+                data.get(
+                    "Seed Watch Count",
+                    0,
+                )
+            )
+
+            if seed_total:
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric(f"{market} Stocks", int(data["Stocks"]))
+                c2.metric(
+                    f"{market} Seed BUY",
+                    int(data["Seed Buy Count"]),
+                )
+                c3.metric(
+                    f"{market} Seed WATCH",
+                    int(data["Seed Watch Count"]),
+                )
+                c4.metric(f"{market} Max", int(data["Max Score"]))
+                continue
+
             c1, c2, c3 = st.columns(3)
             c1.metric(f"{market} Stocks", int(data["Stocks"]))
             c2.metric(f"{market} BUY", int(data["BUY"]))
@@ -719,25 +4057,6 @@ def render_summary(df):
         use_container_width=True,
         hide_index=True,
     )
-
-
-def render_top_market(df, market):
-
-    st.subheader(f"Top {market}")
-
-    top = sort_results(
-        df[
-            (df["Market"] == market)
-            &
-            (df["_signal_group"] != "SKIP")
-        ]
-    ).head(10)
-
-    if top.empty:
-        st.info(f"No {market} results")
-        return
-
-    render_table(top)
 
 
 def render_add_to_watchlist(df):
@@ -829,6 +4148,11 @@ def render_add_to_watchlist(df):
         ),
         days_in_state=safe_number(row.get("DaysInState", 0)),
         state_changed=row.get("StateChanged", False),
+        opportunity_score=safe_number(row.get("OpportunityScore", 0)),
+        opportunity_grade=row.get("OpportunityGrade", ""),
+        confidence=safe_number(row.get("Confidence", 0)),
+        recommended_action=row.get("RecommendedAction", ""),
+        opportunity_reasons=row.get("OpportunityReasons", ""),
         stop_loss=stop_loss,
         target=target,
         note=note,
@@ -929,25 +4253,41 @@ def scanner_page():
     st.title("River Alpha Scanner")
     render_scanner_actions()
 
-    if not RESULT_FILE.exists():
-        st.error("scanner_results.xlsx not found")
+    if not RESULT_CSV_FILE.exists():
+        st.warning("scanner_results.csv not found")
+
+    df, result_path = load_scanner_results_from_disk()
+
+    if result_path is None or df.empty:
+        st.warning("scanner_results.csv or scanner_results.xlsx not found")
         st.info("Run: python scanner.py or use Force Refresh")
         return
 
-    df = pd.read_excel(RESULT_FILE)
     df = prepare_data(df)
+    opportunity_df, opportunity_path, opportunity_fallback = (
+        load_opportunity_results_from_disk(df)
+    )
 
-    last_scan = datetime.fromtimestamp(
-        RESULT_FILE.stat().st_mtime
-    ).strftime("%d/%m/%Y %H:%M:%S")
+    last_scan = result_file_display_time(result_path)
 
     st.caption(f"Last Scan: {last_scan}")
     st.caption(f"Strategy Mode: {current_strategy_mode(df)}")
-
-    render_market_quality_cards(
+    quality = load_quality_for_dashboard(
         df,
         last_scan,
     )
+
+    render_scanner_status(
+        df,
+        result_path,
+        last_scan,
+    )
+    render_debug_info(
+        df,
+        result_path,
+    )
+
+    render_market_quality_cards(df, last_scan)
 
     render_lifecycle_section(df)
 
@@ -972,6 +4312,8 @@ def scanner_page():
         "Strategy Signal",
         [
             "ALL",
+            "SEED BUY",
+            "SEED WATCH",
             "BUY",
             "WATCH",
             "EARLY",
@@ -979,10 +4321,7 @@ def scanner_page():
             "SKIP",
         ],
         default=[
-            "BUY",
-            "WATCH",
-            "EARLY",
-            "EXTENDED",
+            "ALL",
         ],
     )
 
@@ -1003,13 +4342,12 @@ def scanner_page():
 
     st.divider()
 
-    top_cols = st.columns(2)
-
-    with top_cols[0]:
-        render_top_market(df, "SET")
-
-    with top_cols[1]:
-        render_top_market(df, "USA")
+    render_todays_opportunities(
+        opportunity_df,
+        quality,
+        opportunity_path=opportunity_path,
+        is_fallback=opportunity_fallback,
+    )
 
     st.divider()
 
@@ -1022,12 +4360,9 @@ def scanner_page():
         state_changed_only,
     )
 
-    st.subheader("Scanner Results")
-
-    if filtered.empty:
-        st.info("No results")
-        return
-
-    render_add_to_watchlist(filtered)
-
-    render_table(filtered)
+    with st.expander("Scanner Results", expanded=False):
+        if filtered.empty:
+            st.info("No results")
+        else:
+            render_add_to_watchlist(filtered)
+            render_table(filtered)

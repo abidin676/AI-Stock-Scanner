@@ -257,11 +257,15 @@ def calculate_market_quality(
                 "EXTENDED",
             )
         )
+        breakout_mask = setup_contains(
+            data["StrategySetup"],
+            "Breakout",
+        ) & ~setup_contains(
+            data["StrategySetup"],
+            "Pre-Breakout",
+        )
         breakout_count = count_true(
-            setup_contains(
-                data["StrategySetup"],
-                "Breakout",
-            )
+            breakout_mask
         )
         early_reversal_count = count_true(
             setup_contains(

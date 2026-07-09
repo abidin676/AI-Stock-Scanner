@@ -12,7 +12,7 @@ from data import get_histories
 from indicators import add_indicators_cached
 from strategy import trend_start
 from strategy_modes import (
-    STRATEGY_MODE_CHOICES,
+    STRATEGY_MODE_CLI_CHOICES,
     apply_strategy_mode,
     normalize_strategy_mode,
     strategy_mode_label,
@@ -23,6 +23,14 @@ from alert_engine import run_watchlist_alert_check
 from market_quality import (
     calculate_market_quality,
     save_market_quality,
+)
+from opportunity_engine import (
+    calculate_opportunities,
+    save_opportunities,
+)
+from priority_engine import (
+    apply_priority_mode,
+    save_priority_results,
 )
 from config import (
     PERIOD,
@@ -250,6 +258,7 @@ def process_symbol(
         "StrategyReasons",
         [],
     )
+    latest = df.iloc[-1]
 
     return {
         "symbol": symbol,
@@ -268,6 +277,125 @@ def process_symbol(
             "StrategyScore": strategy_result["StrategyScore"],
             "StrategySetup": strategy_result["StrategySetup"],
             "StrategyReasons": ", ".join(strategy_reasons),
+            "SeedScore": strategy_result.get("SeedScore", 0),
+            "SeedProbability": strategy_result.get("SeedProbability", 0),
+            "BaseDays": strategy_result.get("BaseDays", 0),
+            "HighLowRange10": strategy_result.get("HighLowRange10", 0),
+            "HighLowRange20": strategy_result.get("HighLowRange20", 0),
+            "BaseTightnessPct": strategy_result.get("BaseTightnessPct", 0),
+            "Vol5Vol20": strategy_result.get("Vol5Vol20", 0),
+            "Vol5ToVol20": strategy_result.get("Vol5ToVol20", 0),
+            "DryVolumeDays": strategy_result.get("DryVolumeDays", 0),
+            "DryVolumeScore": strategy_result.get("DryVolumeScore", 0),
+            "EMACompressionPct": strategy_result.get("EMACompressionPct", 0),
+            "CompressionScore": strategy_result.get("CompressionScore", 0),
+            "ATRPercentile60": strategy_result.get("ATRPercentile60", 0),
+            "ATRCompressionScore": strategy_result.get("ATRCompressionScore", 0),
+            "PocketPivot": strategy_result.get("PocketPivot", False),
+            "FreshnessScore": strategy_result.get("FreshnessScore", 0),
+            "DaysSinceEMA20SlopeTurnPositive": strategy_result.get(
+                "DaysSinceEMA20SlopeTurnPositive",
+                None,
+            ),
+            "DaysSinceEMA9CrossEMA20": strategy_result.get(
+                "DaysSinceEMA9CrossEMA20",
+                None,
+            ),
+            "DaysSinceBreakout": strategy_result.get(
+                "DaysSinceBreakout",
+                None,
+            ),
+            "PatternName": strategy_result.get("PatternName", ""),
+            "PatternScore": strategy_result.get("PatternScore", 0),
+            "VCPProbability": strategy_result.get("VCPProbability", 0),
+            "BaseQuality": strategy_result.get("BaseQuality", 0),
+            "AccumulationScore": strategy_result.get("AccumulationScore", 0),
+            "ChartReaderSummary": strategy_result.get(
+                "ChartReaderSummary",
+                "",
+            ),
+            "ExpansionScore": strategy_result.get("ExpansionScore", 0),
+            "BottomingSeedScore": strategy_result.get(
+                "BottomingSeedScore",
+                0,
+            ),
+            "DowntrendDecelerationScore": strategy_result.get(
+                "DowntrendDecelerationScore",
+                0,
+            ),
+            "SellingPressureScore": strategy_result.get(
+                "SellingPressureScore",
+                0,
+            ),
+            "SmallCandleScore": strategy_result.get(
+                "SmallCandleScore",
+                0,
+            ),
+            "LowerLowsStopped": strategy_result.get(
+                "LowerLowsStopped",
+                False,
+            ),
+            "FirstHigherLow": strategy_result.get(
+                "FirstHigherLow",
+                False,
+            ),
+            "EMA9CurlUp": strategy_result.get(
+                "EMA9CurlUp",
+                False,
+            ),
+            "EMA20Improving": strategy_result.get(
+                "EMA20Improving",
+                False,
+            ),
+            "FirstIgnition": strategy_result.get(
+                "FirstIgnition",
+                False,
+            ),
+            "DistanceFromHigh60Pct": strategy_result.get(
+                "DistanceFromHigh60Pct",
+                0,
+            ),
+            "NearLow60Pct": strategy_result.get("NearLow60Pct", 0),
+            "BottomingReasons": strategy_result.get(
+                "BottomingReasons",
+                "",
+            ),
+            "PriceAboveLowClose20Pct": strategy_result.get(
+                "PriceAboveLowClose20Pct",
+                0,
+            ),
+            "Return5DPct": strategy_result.get("Return5DPct", 0),
+            "Return10DPct": strategy_result.get("Return10DPct", 0),
+            "BullishCandleStreak": strategy_result.get(
+                "BullishCandleStreak",
+                0,
+            ),
+            "WideRangeBullishCount": strategy_result.get(
+                "WideRangeBullishCount",
+                0,
+            ),
+            "MomentumEstablished": strategy_result.get(
+                "MomentumEstablished",
+                False,
+            ),
+            "EMA9EMA20SpreadPct": strategy_result.get(
+                "EMA9EMA20SpreadPct",
+                0,
+            ),
+            "ExpansionReasons": strategy_result.get(
+                "ExpansionReasons",
+                "",
+            ),
+            "SeedReasons": strategy_result.get("SeedReasons", ""),
+            "ATR": latest.get("atr", 0),
+            "DistanceEMA20Pct": latest.get("distance_ema20", 0),
+            "EMA20": latest.get("ema20", 0),
+            "EMA50": latest.get("ema50", 0),
+            "EMA200": latest.get("ema200", 0),
+            "Low90": latest.get("low90", 0),
+            "High20": latest.get("high20", 0),
+            "High55": latest.get("high55", 0),
+            "MoveFromLow90": latest.get("move_from_low90", 0),
         },
         "decision": result,
         "strategy": strategy_result,
@@ -540,6 +668,12 @@ def show_summary(df):
             "Buy Candidates": data[signal_col].apply(
                 is_buy_candidate
             ).sum(),
+            "Seed Buy": (
+                data[signal_col].astype(str).str.upper() == "SEED BUY"
+            ).sum(),
+            "Seed Watch": (
+                data[signal_col].astype(str).str.upper() == "SEED WATCH"
+            ).sum(),
             "WATCH": data[signal_col].astype(str).str.contains(
                 "WATCH",
                 regex=False,
@@ -623,7 +757,93 @@ def save_market_quality_summary(
     )
     print(f"\nSaved Market Quality: {output_path}")
 
-    return time.perf_counter() - quality_start
+    return time.perf_counter() - quality_start, quality
+
+
+def save_opportunity_summary(df, market_quality):
+
+    opportunity_start = time.perf_counter()
+    opportunities = calculate_opportunities(
+        df,
+        market_quality=market_quality,
+    )
+    output_path = save_opportunities(opportunities)
+
+    print("\n========== TODAY'S OPPORTUNITIES ==========\n")
+
+    if opportunities.empty:
+        print("No opportunities")
+    else:
+        display_columns = [
+            "OpportunityRank",
+            "Symbol",
+            "Market",
+            "OpportunityScore",
+            "OpportunityGrade",
+            "RecommendedAction",
+            "StrategySignal",
+            "LifecycleState",
+        ]
+        display_columns = [
+            column
+            for column in display_columns
+            if column in opportunities.columns
+        ]
+        print(
+            opportunities[display_columns]
+            .head(20)
+            .to_string(index=False)
+        )
+
+    print(f"\nSaved Opportunities: {output_path}")
+
+    return opportunities, time.perf_counter() - opportunity_start
+
+
+def save_priority_summary(opportunities, market_quality):
+
+    priority_start = time.perf_counter()
+    prioritized = apply_priority_mode(
+        opportunities,
+        "Seed First",
+        market_quality_df=market_quality,
+        ai_recommended_priority="Seed First",
+        ai_recommendation_reason=(
+            "Default scanner priority after each run."
+        ),
+    )
+    output_path = save_priority_results(prioritized)
+
+    print("\n========== PRIORITY RESULTS ==========\n")
+
+    if prioritized.empty:
+        print("No priority results")
+    else:
+        display_columns = [
+            "PriorityRank",
+            "Symbol",
+            "Market",
+            "PriorityScore",
+            "PriorityAction",
+            "PriorityMode",
+            "OpportunityScore",
+            "StrategySignal",
+            "LifecycleState",
+        ]
+        display_columns = [
+            column
+            for column in display_columns
+            if column in prioritized.columns
+        ]
+        print(
+            prioritized[display_columns]
+            .head(20)
+            .to_string(index=False)
+        )
+
+    print(f"\nSaved Priority Results: {output_path}")
+
+    return prioritized, time.perf_counter() - priority_start
 
 
 def show_scan_duration(scan_timings, total_time):
@@ -837,6 +1057,7 @@ def main(
         df,
         strategy_mode=strategy_mode,
     )
+    df["ScanMode"] = mode
 
     df = df.sort_values(
         by="StrategyScore"
@@ -845,13 +1066,34 @@ def main(
         ascending=False
     )
 
-    export_time = save_results(df)
-
-    quality_time = save_market_quality_summary(
+    quality_time, market_quality = save_market_quality_summary(
         df,
         market_scan_seconds,
         datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     )
+
+    df, opportunity_time = save_opportunity_summary(
+        df,
+        market_quality,
+    )
+
+    df, priority_time = save_priority_summary(
+        df,
+        market_quality,
+    )
+
+    df = df.sort_values(
+        by="PriorityScore"
+        if "PriorityScore" in df.columns
+        else "OpportunityScore"
+        if "OpportunityScore" in df.columns
+        else "StrategyScore"
+        if "StrategyScore" in df.columns
+        else "Score",
+        ascending=False,
+    )
+
+    export_time = save_results(df)
 
     alert_time = run_watchlist_alerts(df)
 
@@ -902,8 +1144,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--strategy-mode",
         default="standard",
-        choices=STRATEGY_MODE_CHOICES,
-        help="Scanner strategy mode: standard, early, breakout, momentum.",
+        choices=STRATEGY_MODE_CLI_CHOICES,
+        help=(
+            "Scanner strategy mode: standard, early, pure_early, "
+            "breakout, momentum."
+        ),
     )
     args = parser.parse_args()
 

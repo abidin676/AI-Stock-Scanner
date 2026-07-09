@@ -18,6 +18,7 @@ data/price_cache/
 data/indicator_cache/
 output/*.csv
 output/*.xlsx
+output/*.log
 data/strategy_history.csv
 data/strategy_lifecycle.csv
 data/watchlist.csv

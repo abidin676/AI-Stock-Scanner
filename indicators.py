@@ -9,7 +9,9 @@ from ta.momentum import RSIIndicator
 
 
 INDICATOR_CACHE_DIR = Path("data") / "indicator_cache"
+INDICATOR_VERSION = "v2_seed_expansion_20260709"
 INDICATOR_COLUMNS = [
+    "indicator_version",
     "ema9",
     "ema20",
     "ema50",
@@ -26,8 +28,18 @@ INDICATOR_COLUMNS = [
     "atr20",
     "atr_compression",
     "ema_spread",
+    "ema_spread_pct",
+    "compression_score",
     "ema_compression",
     "distance_ema20",
+    "lowest_close_20",
+    "price_above_low_close20_pct",
+    "return_5d_pct",
+    "return_10d_pct",
+    "bullish_candle_streak",
+    "wide_range_bullish",
+    "wide_range_bullish_count_10",
+    "momentum_established",
     "low90",
     "move_from_low90",
     "ema9_slope",
@@ -36,9 +48,22 @@ INDICATOR_COLUMNS = [
     "ema200_slope",
     "ema_alignment",
     "dry_volume",
+    "vol5",
+    "vol5_vol20",
+    "dry_volume_days",
+    "dry_volume_score",
     "higher_low",
     "higher_high",
     "trend_change",
+    "base_days",
+    "high_low_range_10",
+    "high_low_range_20",
+    "base_tightness_pct",
+    "atr_percentile_60",
+    "atr_compression_score",
+    "days_since_ema20_slope_turn_positive",
+    "days_since_ema9_cross_ema20",
+    "days_since_breakout",
     "high20",
     "break20",
     "high55",
@@ -70,7 +95,73 @@ BOOLEAN_COLUMNS = [
     "inside_bar",
     "volume_breakout",
     "pivot_breakout",
+    "wide_range_bullish",
+    "momentum_established",
 ]
+
+
+def consecutive_count(condition):
+
+    count = 0
+    values = []
+
+    for value in condition.fillna(False).astype(bool):
+        count = count + 1 if value else 0
+        values.append(count)
+
+    return pd.Series(
+        values,
+        index=condition.index,
+    )
+
+
+def days_since_event(condition):
+
+    days = []
+    latest_event_index = None
+
+    for index, value in enumerate(condition.fillna(False).astype(bool)):
+        if value:
+            latest_event_index = index
+
+        if latest_event_index is None:
+            days.append(float("nan"))
+        else:
+            days.append(index - latest_event_index)
+
+    return pd.Series(
+        days,
+        index=condition.index,
+        dtype="float64",
+    )
+
+
+def rolling_last_percentile(series, window=60):
+
+    def percentile(values):
+        current = values[-1]
+
+        if pd.isna(current):
+            return float("nan")
+
+        valid = pd.Series(values).dropna()
+
+        if valid.empty:
+            return float("nan")
+
+        return (
+            (valid <= current).sum()
+            / len(valid)
+            * 100
+        )
+
+    return series.rolling(
+        window,
+        min_periods=20,
+    ).apply(
+        percentile,
+        raw=True,
+    )
 
 
 def indicator_cache_path(
@@ -232,6 +323,8 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     เพิ่ม Indicators สำหรับ Scanner
     """
 
+    df["indicator_version"] = INDICATOR_VERSION
+
     # EMA
     df["ema9"] = EMAIndicator(df["close"], window=9).ema_indicator()
     df["ema20"] = EMAIndicator(df["close"], window=20).ema_indicator()
@@ -262,6 +355,8 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     # Volume
     df["vol20"] = df["volume"].rolling(20).mean()
     df["rvol"] = df["volume"] / df["vol20"]
+    df["vol5"] = df["volume"].rolling(5).mean()
+    df["vol5_vol20"] = df["vol5"] / df["vol20"]
     # ==========================
     # ATR
     # ==========================
@@ -278,6 +373,20 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["atr20"] = df["atr"].rolling(20).mean()
 
     df["atr_compression"] = df["atr"] < df["atr20"] * 0.85
+    atr_low60 = df["atr"].rolling(60, min_periods=20).min()
+    atr_high60 = df["atr"].rolling(60, min_periods=20).max()
+    df["atr_percentile_60"] = (
+        (df["atr"] - atr_low60)
+        / (atr_high60 - atr_low60).replace(0, pd.NA)
+        * 100
+    )
+    df["atr_compression_score"] = (
+        100
+        - df["atr_percentile_60"]
+    ).clip(
+        lower=0,
+        upper=100,
+    )
 
     # ==========================
     # EMA Compression
@@ -291,6 +400,14 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
         / df["close"]
         * 100
     )
+    df["ema_spread_pct"] = df["ema_spread"]
+    df["compression_score"] = (
+        100
+        - df["ema_spread_pct"] * 35
+    ).clip(
+        lower=0,
+        upper=100,
+    )
 
     df["ema_compression"] = df["ema_spread"] < 2
 
@@ -303,6 +420,55 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
         / df["ema20"]
         * 100
     )
+    df["lowest_close_20"] = (
+        df["close"]
+        .rolling(20)
+        .min()
+    )
+    df["price_above_low_close20_pct"] = (
+        (df["close"] - df["lowest_close_20"])
+        / df["lowest_close_20"].replace(0, pd.NA)
+        * 100
+    )
+    df["return_5d_pct"] = (
+        df["close"]
+        / df["close"].shift(5)
+        - 1
+    ) * 100
+    df["return_10d_pct"] = (
+        df["close"]
+        / df["close"].shift(10)
+        - 1
+    ) * 100
+    bullish_candle = df["close"] > df["open"]
+    df["bullish_candle_streak"] = consecutive_count(
+        bullish_candle
+    )
+    df["high_low_range_10"] = (
+        (
+            df["high"].rolling(10).max()
+            - df["low"].rolling(10).min()
+        )
+        / df["close"].replace(0, pd.NA)
+        * 100
+    )
+    df["high_low_range_20"] = (
+        (
+            df["high"].rolling(20).max()
+            - df["low"].rolling(20).min()
+        )
+        / df["close"].replace(0, pd.NA)
+        * 100
+    )
+    df["base_tightness_pct"] = df["high_low_range_20"]
+    base_condition = (
+        (df["high_low_range_20"] <= 18)
+        &
+        (df["distance_ema20"] <= 8)
+        &
+        (df["ema_spread_pct"] <= 6)
+    )
+    df["base_days"] = consecutive_count(base_condition)
 
     # ==========================
     # 90 Day Low
@@ -341,6 +507,22 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
         df["ema200"]
         - df["ema200"].shift(20)
     )
+    ema20_slope_turn_positive = (
+        (df["ema20_slope"] > 0)
+        &
+        (df["ema20_slope"].shift(1) <= 0)
+    )
+    df["days_since_ema20_slope_turn_positive"] = days_since_event(
+        ema20_slope_turn_positive
+    )
+    ema9_cross_ema20 = (
+        (df["ema9"] >= df["ema20"])
+        &
+        (df["ema9"].shift(1) < df["ema20"].shift(1))
+    )
+    df["days_since_ema9_cross_ema20"] = days_since_event(
+        ema9_cross_ema20
+    )
     # EMA Alignment
     df["ema_alignment"] = (
         (
@@ -362,6 +544,21 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
         .mean()
         <
         df["vol20"] * 0.7
+    )
+    dry_session = df["volume"] < df["vol20"] * 0.75
+    df["dry_volume_days"] = (
+        dry_session
+        .rolling(10)
+        .sum()
+        .fillna(0)
+    )
+    df["dry_volume_score"] = (
+        df["dry_volume_days"]
+        / 5
+        * 100
+    ).clip(
+        lower=0,
+        upper=100,
     )
 
     # ==========================
@@ -423,6 +620,9 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["break55"] = (
         df["close"] > df["high55"]
     )
+    df["days_since_breakout"] = days_since_event(
+        df["break20"] | df["break55"]
+    )
 
 # ==========================
 # Pivot High
@@ -449,6 +649,48 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
         >=
         df["low"] + (df["high"] - df["low"]) * 0.75
     )
+    candle_range = df["high"] - df["low"]
+    avg_range_20 = candle_range.rolling(20).mean()
+    df["wide_range_bullish"] = (
+        bullish_candle
+        &
+        (
+            candle_range
+            >
+            avg_range_20 * 1.30
+        )
+        &
+        (
+            df["close"]
+            >=
+            df["low"] + candle_range * 0.60
+        )
+    )
+    df["wide_range_bullish_count_10"] = (
+        df["wide_range_bullish"]
+        .rolling(10)
+        .sum()
+        .fillna(0)
+    )
+    df["momentum_established"] = (
+        (df["price_above_low_close20_pct"] > 12)
+        |
+        (df["return_5d_pct"] > 8)
+        |
+        (df["return_10d_pct"] > 15)
+        |
+        (df["bullish_candle_streak"] > 3)
+        |
+        (df["wide_range_bullish_count_10"] > 2)
+        |
+        (
+            (df["rsi"] > 60)
+            &
+            (df["ema9"] > df["ema20"])
+            &
+            (df["close"] > df["ema20"] * 1.03)
+        )
+    )
 
 # ==========================
 # Close Above Previous High
@@ -462,12 +704,32 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
 # Pocket Pivot
 # ==========================
 
+    red_day_volume = df["volume"].where(
+        df["close"] < df["open"],
+        0,
+    )
+    max_red_volume_10 = (
+        red_day_volume
+        .rolling(10)
+        .max()
+        .shift(1)
+    )
     df["pocket_pivot"] = (
         (df["close"] > df["open"])
         &
-        (df["volume"] > df["volume"].shift(1))
+        (df["volume"] > max_red_volume_10)
         &
-        (df["close"] > df["ema20"])
+        (
+            (df["close"] > df["ema9"])
+            |
+            (df["close"] > df["ema20"])
+        )
+        &
+        (
+            df["ema20_slope"]
+            >=
+            -df["ema20"].abs() * 0.002
+        )
     )
 
 

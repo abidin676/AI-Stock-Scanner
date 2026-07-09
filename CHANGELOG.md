@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.3 (2026-07-09)
+
+### Release
+- River Alpha v2.3
+- Dashboard UI frozen
+
+### Changed
+- Final Scanner Dashboard polish for AI Pick Today, Seed cards, Buy Queue, Market Quality, and Opportunity Detail.
+
+### Notes
+- Future Scanner Dashboard changes are bug fixes only.
+
 ## v1.0.0 (2026-07-07)
 
 ### Added

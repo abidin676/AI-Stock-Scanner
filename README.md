@@ -4,12 +4,19 @@ River Alpha Scanner is a local stock research platform for finding high-quality 
 
 This project is designed as a decision-support tool, not an automated trading bot or financial advice.
 
+## Release Status
+
+- Version: River Alpha v2.3
+- Status: Dashboard UI Frozen
+- Future Scanner UI changes: bug fixes only
+
 ## Features
 
 - Scanner for SET, US100, S&P 500, and Dow 30 watchlists
 - Modular decision architecture: Trend, Momentum, Volume, Base, Breakout, Price, Stage, Quality Gate, and Signal Engine
 - Market Quality Score for SET and USA after each scan
 - Streamlit dashboard with filters, market summary, top SET/USA candidates, and scanner results
+- Seed-focused Dashboard with AI Pick Today, Top 5 SET/USA Seed cards, Buy Queue, and Market Quality recommendations
 - Watchlist workflow with notes, status, stop loss, target, and alerts
 - Portfolio Manager with SET/USA fee support and THB summary
 - Strategy Lab with backtest trades, equity curve, monthly returns, benchmark comparison, and run history

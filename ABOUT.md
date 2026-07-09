@@ -2,7 +2,7 @@
 
 ## Version
 
-1.0.0
+2.3
 
 ## Build
 
@@ -19,6 +19,14 @@ v1
 ## Strategy Lab
 
 Phase 2.3
+
+## Dashboard
+
+UI Frozen
+
+## Future Scanner UI Changes
+
+Bug fixes only
 
 ## Git Commit
 
