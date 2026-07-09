@@ -1,13 +1,37 @@
+import argparse
 from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
 
+from notification.console_notifier import ConsoleNotifier
+from notification.line_notifier import LineNotifier
+from notification.telegram_notifier import TelegramNotifier
 from watchlist import load_watchlist
 
 
 SNAPSHOT_FILE = Path("data") / "watchlist_scan_snapshot.csv"
 ALERT_FILE = Path("data") / "watchlist_alerts.csv"
+PRIORITY_RESULTS_FILE = Path("output") / "priority_results.csv"
+SEED_ALERT_HISTORY_FILE = Path("data") / "alert_history.csv"
+SEED_ALERT_OUTPUT_FILE = Path("output") / "seed_alerts.csv"
+SEED_ALERT_COLUMNS = [
+    "AlertTime",
+    "ScanDate",
+    "AlertKey",
+    "Symbol",
+    "Market",
+    "Signal",
+    "Action",
+    "SeedScore",
+    "PatternName",
+    "FreshnessScore",
+    "ExpansionScore",
+    "RR",
+    "Reason",
+    "Message",
+    "SourceFile",
+]
 ALERT_COLUMNS = [
     "AlertTime",
     "AlertKey",
@@ -134,6 +158,24 @@ def _safe_bool(value):
     }
 
 
+def _safe_text(value, default=""):
+
+    if pd.isna(value):
+        return default
+
+    return str(value).strip()
+
+
+def _format_score(value, digits=0):
+
+    number = _safe_float(value)
+
+    if digits <= 0:
+        return f"{number:.0f}"
+
+    return f"{number:.{digits}f}"
+
+
 def _normalize_state(value):
 
     state = str(value or "UNKNOWN").strip().upper()
@@ -169,6 +211,391 @@ def signal_group(signal):
 def is_breakout(setup):
 
     return "BREAKOUT" in str(setup).upper()
+
+
+def empty_seed_alerts():
+
+    return pd.DataFrame(
+        columns=SEED_ALERT_COLUMNS
+    )
+
+
+def ensure_seed_alert_columns(df):
+
+    data = df.copy()
+
+    for column in SEED_ALERT_COLUMNS:
+        if column not in data.columns:
+            data[column] = ""
+
+    return data[SEED_ALERT_COLUMNS]
+
+
+def save_seed_alerts(df, path=SEED_ALERT_OUTPUT_FILE):
+
+    path.parent.mkdir(
+        exist_ok=True
+    )
+    ensure_seed_alert_columns(df).to_csv(
+        path,
+        index=False,
+    )
+
+
+def load_alert_history(path=SEED_ALERT_HISTORY_FILE):
+
+    path.parent.mkdir(
+        exist_ok=True
+    )
+
+    if not path.exists():
+        save_seed_alert_history(
+            empty_seed_alerts(),
+            path=path,
+        )
+        return empty_seed_alerts()
+
+    try:
+        return ensure_seed_alert_columns(
+            pd.read_csv(path)
+        )
+    except pd.errors.EmptyDataError:
+        return empty_seed_alerts()
+
+
+def save_seed_alert_history(df, path=SEED_ALERT_HISTORY_FILE):
+
+    path.parent.mkdir(
+        exist_ok=True
+    )
+    ensure_seed_alert_columns(df).to_csv(
+        path,
+        index=False,
+    )
+
+
+def load_priority_results(path=PRIORITY_RESULTS_FILE):
+
+    if not path.exists():
+        return pd.DataFrame()
+
+    try:
+        return pd.read_csv(path)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame()
+
+
+def scan_date_for_file(path=PRIORITY_RESULTS_FILE):
+
+    if path.exists():
+        return datetime.fromtimestamp(
+            path.stat().st_mtime
+        ).strftime("%Y-%m-%d")
+
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def valid_seed_candidates(priority_results):
+
+    if priority_results.empty:
+        return priority_results.copy()
+
+    data = priority_results.copy()
+
+    for column in [
+        "Symbol",
+        "Market",
+        "LifecycleState",
+        "StrategySignal",
+        "RecommendedAction",
+    ]:
+        if column not in data.columns:
+            data[column] = ""
+
+    lifecycle = data["LifecycleState"].astype(str).str.upper()
+    signal = data["StrategySignal"].astype(str).str.upper()
+    action = data["RecommendedAction"].astype(str).str.upper()
+    valid = data[
+        (lifecycle == "SEED")
+        & signal.str.contains("SEED", regex=False, na=False)
+        & ~signal.str.contains(
+            "MOMENTUM|EXTENDED|SKIP",
+            regex=True,
+            na=False,
+        )
+        & (action != "IGNORE")
+    ].copy()
+
+    if valid.empty:
+        return valid
+
+    if "PriorityRank" in valid.columns:
+        valid["_alert_rank"] = pd.to_numeric(
+            valid["PriorityRank"],
+            errors="coerce",
+        ).fillna(999999)
+    else:
+        valid["_alert_rank"] = 999999
+
+    if "PriorityScore" in valid.columns:
+        valid["_alert_score"] = pd.to_numeric(
+            valid["PriorityScore"],
+            errors="coerce",
+        ).fillna(0)
+    else:
+        valid["_alert_score"] = pd.to_numeric(
+            valid["SeedScore"]
+            if "SeedScore" in valid.columns
+            else pd.Series(0, index=valid.index),
+            errors="coerce",
+        ).fillna(0)
+
+    return valid.sort_values(
+        [
+            "_alert_rank",
+            "_alert_score",
+        ],
+        ascending=[
+            True,
+            False,
+        ],
+    )
+
+
+def seed_alert_action(row):
+
+    signal = _safe_text(
+        row.get(
+            "StrategySignal",
+            row.get("Signal", ""),
+        )
+    ).upper()
+
+    if "SEED BUY" in signal:
+        return "BUY"
+
+    if "SEED WATCH" in signal:
+        return "WATCH"
+
+    action = _safe_text(row.get("RecommendedAction", "WATCH")).upper()
+
+    if "BUY" in action:
+        return "BUY"
+
+    if "WATCH" in action:
+        return "WATCH"
+
+    return action or "WATCH"
+
+
+def seed_alert_reason(row):
+
+    setup = _safe_text(
+        row.get(
+            "StrategySetup",
+            row.get("Setup", "Seed"),
+        ),
+        "Seed",
+    )
+    base_days = _safe_int(row.get("BaseDays", 0))
+    dry_days = _safe_int(row.get("DryVolumeDays", 0))
+    parts = []
+
+    if setup:
+        parts.append(setup)
+
+    if base_days > 0:
+        parts.append(f"Base {base_days}d")
+
+    if dry_days > 0:
+        parts.append(f"Dry volume {dry_days}d")
+
+    return " · ".join(parts)
+
+
+def seed_alert_message(row, action, reason):
+
+    symbol = _safe_text(row.get("Symbol", "")).upper()
+    seed_score = _format_score(row.get("SeedScore", 0))
+    pattern = _safe_text(row.get("PatternName", "Seed"), "Seed")
+    freshness = _format_score(row.get("FreshnessScore", 0))
+    expansion = _format_score(row.get("ExpansionScore", 0))
+    rr = _format_score(row.get("RR", 0), digits=1)
+
+    return "\n".join(
+        [
+            "🌱 River Alpha Seed Alert",
+            f"Symbol: {symbol}",
+            f"Action: {action}",
+            f"Seed: {seed_score}",
+            f"Pattern: {pattern}",
+            f"Fresh: {freshness}",
+            f"Expansion: {expansion}",
+            f"RR: {rr}",
+            f"Reason: {reason}",
+        ]
+    )
+
+
+def seed_alert_row(row, scan_date, source_file=PRIORITY_RESULTS_FILE):
+
+    signal = _safe_text(
+        row.get(
+            "StrategySignal",
+            row.get("Signal", ""),
+        )
+    ).upper()
+    symbol = _safe_text(row.get("Symbol", "")).upper()
+    market = _safe_text(row.get("Market", "")).upper()
+    action = seed_alert_action(row)
+    reason = seed_alert_reason(row)
+    alert_key = f"{symbol}|{scan_date}|{signal}"
+
+    return {
+        "AlertTime": datetime.now().isoformat(timespec="seconds"),
+        "ScanDate": scan_date,
+        "AlertKey": alert_key,
+        "Symbol": symbol,
+        "Market": market,
+        "Signal": signal,
+        "Action": action,
+        "SeedScore": _format_score(row.get("SeedScore", 0)),
+        "PatternName": _safe_text(row.get("PatternName", "")),
+        "FreshnessScore": _format_score(row.get("FreshnessScore", 0)),
+        "ExpansionScore": _format_score(row.get("ExpansionScore", 0)),
+        "RR": _format_score(row.get("RR", 0), digits=1),
+        "Reason": reason,
+        "Message": seed_alert_message(row, action, reason),
+        "SourceFile": str(source_file),
+    }
+
+
+def generate_seed_alerts(
+    priority_results=None,
+    scan_date=None,
+    history=None,
+    source_file=PRIORITY_RESULTS_FILE,
+    force=False,
+):
+
+    priority_results = (
+        load_priority_results(source_file)
+        if priority_results is None
+        else priority_results
+    )
+    scan_date = scan_date or scan_date_for_file(source_file)
+    history = load_alert_history() if history is None else history
+    existing_keys = set(
+        history.get(
+            "AlertKey",
+            pd.Series(dtype=str),
+        )
+        .dropna()
+        .astype(str)
+    )
+    rows = []
+    generated_keys = set()
+
+    for _, row in valid_seed_candidates(priority_results).iterrows():
+        alert = seed_alert_row(
+            row,
+            scan_date,
+            source_file=source_file,
+        )
+
+        if alert["AlertKey"] in generated_keys:
+            continue
+
+        if not force and alert["AlertKey"] in existing_keys:
+            continue
+
+        generated_keys.add(alert["AlertKey"])
+        rows.append(alert)
+
+    if not rows:
+        return empty_seed_alerts()
+
+    return ensure_seed_alert_columns(pd.DataFrame(rows))
+
+
+def run_seed_alert_engine(
+    priority_path=PRIORITY_RESULTS_FILE,
+    output_path=SEED_ALERT_OUTPUT_FILE,
+    history_path=SEED_ALERT_HISTORY_FILE,
+    force=False,
+    reset_history=False,
+):
+
+    if reset_history:
+        history = empty_seed_alerts()
+        save_seed_alert_history(
+            history,
+            path=history_path,
+        )
+    else:
+        history = load_alert_history(history_path)
+
+    priority_results = load_priority_results(priority_path)
+    alerts = generate_seed_alerts(
+        priority_results=priority_results,
+        scan_date=scan_date_for_file(priority_path),
+        history=history,
+        source_file=priority_path,
+        force=force,
+    )
+    save_seed_alerts(
+        alerts,
+        path=output_path,
+    )
+
+    if not alerts.empty:
+        updated_history = pd.concat(
+            [
+                history,
+                alerts,
+            ],
+            ignore_index=True,
+        ).drop_duplicates(
+            subset=["AlertKey"],
+            keep="first",
+        )
+        save_seed_alert_history(
+            updated_history,
+            path=history_path,
+        )
+    else:
+        save_seed_alert_history(
+            history,
+            path=history_path,
+        )
+
+    return alerts
+
+
+def build_notifier(name="console"):
+
+    key = str(name or "console").strip().lower()
+
+    if key == "console":
+        return ConsoleNotifier()
+
+    if key == "line":
+        return LineNotifier()
+
+    if key == "telegram":
+        return TelegramNotifier()
+
+    raise ValueError(f"Unknown notifier: {name}")
+
+
+def notify_seed_alerts(alerts, notifier):
+
+    if alerts.empty:
+        return
+
+    for message in alerts["Message"].dropna().astype(str):
+        if message.strip():
+            notifier.send(message)
 
 
 def lifecycle_alert_key(symbol, old_state, new_state):
@@ -611,3 +1038,75 @@ def run_watchlist_alert_check(scanner_results):
     save_snapshot(current)
 
     return alerts
+
+
+def parse_args():
+
+    parser = argparse.ArgumentParser(
+        description="River Alpha local dry-run alert engine."
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Generate alerts even if the alert key already exists in history.",
+    )
+    parser.add_argument(
+        "--reset-history",
+        action="store_true",
+        help="Clear data/alert_history.csv before running.",
+    )
+    parser.add_argument(
+        "--send-line",
+        action="store_true",
+        help="Placeholder for future LINE delivery. Does not send yet.",
+    )
+    parser.add_argument(
+        "--notifier",
+        choices=[
+            "console",
+            "line",
+            "telegram",
+        ],
+        default="console",
+        help="Notification backend to use for alert messages.",
+    )
+
+    return parser.parse_args()
+
+
+def main():
+
+    args = parse_args()
+
+    seed_alerts = run_seed_alert_engine(
+        force=args.force,
+        reset_history=args.reset_history,
+    )
+    notifier_name = "line" if args.send_line else args.notifier
+    notifier = build_notifier(notifier_name)
+
+    try:
+        notify_seed_alerts(
+            seed_alerts,
+            notifier,
+        )
+    except NotImplementedError as exc:
+        if args.send_line:
+            print("LINE sending is not implemented yet.")
+        else:
+            print(str(exc))
+
+    print(
+        f"Seed alerts generated: {len(seed_alerts)}"
+    )
+    print(
+        f"Output: {SEED_ALERT_OUTPUT_FILE}"
+    )
+    print(
+        f"History: {SEED_ALERT_HISTORY_FILE}"
+    )
+
+
+if __name__ == "__main__":
+
+    main()
