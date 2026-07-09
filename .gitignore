@@ -6,6 +6,12 @@ __pycache__/
 *.py[cod]
 *.pyo
 
+# Runtime
+
+data/alert_history.csv
+tmp/
+*.log
+
 # Virtual Environment
 
 venv/
