@@ -9,6 +9,7 @@ __pycache__/
 # Runtime
 
 data/alert_history.csv
+data/recommendation_history.csv
 tmp/
 *.log
 
