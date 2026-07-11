@@ -13,6 +13,13 @@ data/alert_history.csv
 data/approval_history.csv
 data/approval_queue.csv
 data/fx_cache.csv
+data/paper_account.json
+data/paper_cash_ledger.csv
+data/paper_execution_history.csv
+data/paper_fills.csv
+data/paper_orders.csv
+data/paper_portfolio.csv
+data/paper_trades.csv
 data/recommendation_history.csv
 tmp/
 *.log

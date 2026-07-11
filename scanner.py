@@ -38,7 +38,14 @@ from ai_decision_engine import (
 )
 from approval_queue import (
     build_approval_summary,
+    ready_for_paper_broker,
     sync_approval_queue,
+)
+from paper_broker import load_paper_broker_config
+from paper_portfolio import (
+    calculate_portfolio_summary,
+    load_paper_account,
+    load_paper_portfolio,
 )
 from risk_manager import (
     build_order_proposals,
@@ -1061,6 +1068,29 @@ def save_risk_manager_summary(ai_decisions):
                     "Ready For Paper Broker: "
                     f"{int(approval_row.get('ReadyForPaperBroker', 0))}"
                 )
+
+                paper_config = load_paper_broker_config()
+                paper_account = load_paper_account(config=paper_config)
+                paper_portfolio = load_paper_portfolio()
+                paper_summary = calculate_portfolio_summary(
+                    paper_portfolio,
+                    paper_account,
+                )
+                ready = ready_for_paper_broker(approval_queue)
+                executed_today = int(
+                    (
+                        approval_queue["Status"].astype(str).str.upper()
+                        == "EXECUTED"
+                    ).sum()
+                )
+
+                print("\n========== PAPER BROKER STATUS ==========\n")
+                print(f"Execution Mode: {paper_config.execution_mode}")
+                print(f"Approved Ready: {len(ready)}")
+                print(f"Executed Today: {executed_today}")
+                print(f"Open Positions: {paper_summary.get('OpenPositions', 0)}")
+                print(f"Cash: {paper_summary.get('Cash', 0):,.2f}")
+                print(f"Total Equity: {paper_summary.get('TotalEquity', 0):,.2f}")
 
         except Exception as exc:
             print(

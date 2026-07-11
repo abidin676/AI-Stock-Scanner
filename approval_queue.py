@@ -57,6 +57,9 @@ QUEUE_COLUMNS = [
     "Status",
     "ApprovedBy",
     "ApprovedTime",
+    "ExecutedTime",
+    "PaperOrderId",
+    "FillId",
     "RejectedReason",
     "SourceDecision",
     "AIReason",
@@ -409,7 +412,7 @@ def expire_pending_proposals(
         return data, records
 
     for idx, row in data.iterrows():
-        if row["Status"] != "PENDING_APPROVAL":
+        if row["Status"] not in {"PENDING_APPROVAL", "APPROVED"}:
             continue
 
         expire_time = parse_time(row["ExpireTime"], fallback=current + timedelta(hours=1))
@@ -565,8 +568,11 @@ def transition_proposal(
     if to_status == "APPROVED" and current_status != "PENDING_APPROVAL":
         raise ApprovalQueueError(f"Only pending proposals can be approved. Current status: {current_status}")
 
-    if to_status in {"REJECTED", "CANCELLED"} and current_status != "PENDING_APPROVAL":
-        raise ApprovalQueueError(f"Only pending proposals can be {to_status.lower()}. Current status: {current_status}")
+    if to_status == "REJECTED" and current_status != "PENDING_APPROVAL":
+        raise ApprovalQueueError(f"Only pending proposals can be rejected. Current status: {current_status}")
+
+    if to_status == "CANCELLED" and current_status not in {"PENDING_APPROVAL", "APPROVED"}:
+        raise ApprovalQueueError(f"Only pending or approved proposals can be cancelled. Current status: {current_status}")
 
     if to_status == "EXECUTED" and current_status != "APPROVED":
         raise ApprovalQueueError(f"Only approved proposals can be marked executed. Current status: {current_status}")
@@ -577,6 +583,9 @@ def transition_proposal(
     if to_status == "APPROVED":
         queue.at[idx, "ApprovedBy"] = safe_text(changed_by, "manual")
         queue.at[idx, "ApprovedTime"] = now_iso(current_time)
+
+    if to_status == "EXECUTED":
+        queue.at[idx, "ExecutedTime"] = now_iso(current_time)
 
     if to_status == "REJECTED":
         queue.at[idx, "RejectedReason"] = safe_text(reason, "Manual rejection")
@@ -655,6 +664,48 @@ def ready_for_paper_broker(queue_df: pd.DataFrame | None = None) -> pd.DataFrame
     queue = normalize_queue_frame(queue_df if queue_df is not None else load_approval_queue())
     ready = queue[queue["Status"] == "APPROVED"].copy()
     return sort_queue(ready)
+
+
+def mark_proposal_executed(
+    proposal_id: str,
+    paper_order_id: str,
+    fill_id: str,
+    changed_by: str = "paper_broker",
+    queue_path: Path = APPROVAL_QUEUE_FILE,
+    history_path: Path = APPROVAL_HISTORY_FILE,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    queue = load_approval_queue(queue_path)
+    queue, expire_records = expire_pending_proposals(queue, now=now, changed_by="system")
+    idx = find_queue_index(queue, proposal_id)
+    row = queue.loc[idx].to_dict()
+    current_status = row["Status"]
+    current_time = now or datetime.now()
+
+    if current_status != "APPROVED":
+        save_approval_queue(queue, queue_path)
+        append_history(expire_records, history_path)
+        raise ApprovalQueueError(f"Only approved proposals can be marked executed. Current status: {current_status}")
+
+    queue.at[idx, "Status"] = "EXECUTED"
+    queue.at[idx, "PaperOrderId"] = safe_text(paper_order_id)
+    queue.at[idx, "FillId"] = safe_text(fill_id)
+    queue.at[idx, "ExecutedTime"] = now_iso(current_time)
+    queue.at[idx, "LastUpdatedTime"] = now_iso(current_time)
+
+    record = history_record(
+        queue.loc[idx].to_dict(),
+        current_status,
+        "EXECUTED",
+        changed_by,
+        "paper_execution_completed",
+        notes=f"PaperOrderId={paper_order_id}; FillId={fill_id}",
+        now=current_time,
+    )
+    save_approval_queue(queue, queue_path)
+    append_history([*expire_records, record], history_path)
+
+    return queue.loc[idx].to_dict()
 
 
 def build_approval_summary(queue_df: pd.DataFrame | None = None) -> pd.DataFrame:

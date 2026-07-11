@@ -1,0 +1,20 @@
+{
+  "initial_cash": 100000.0,
+  "fill_policy": "FULL_FILL",
+  "price_source": "PROPOSAL_ENTRY",
+  "default_slippage_pct": 0.1,
+  "commission_pct": 0.157,
+  "minimum_commission": 0.0,
+  "allow_partial_fill": false,
+  "partial_fill_pct": 50.0,
+  "reject_expired_proposal": true,
+  "reject_duplicate_execution": true,
+  "allow_negative_cash": false,
+  "allow_short_selling": false,
+  "allow_fractional_usa": false,
+  "set_board_lot": 100,
+  "auto_mark_executed": true,
+  "require_approved_status": true,
+  "execution_mode": "MANUAL",
+  "paper_broker_version": "1.0"
+}
