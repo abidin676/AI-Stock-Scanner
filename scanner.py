@@ -36,6 +36,13 @@ from ai_decision_engine import (
     build_ai_decisions,
     save_ai_decisions,
 )
+from risk_manager import (
+    build_order_proposals,
+    build_risk_summary,
+    load_risk_config,
+    save_order_proposals,
+    save_risk_summary,
+)
 from config import (
     PERIOD,
     INTERVAL,
@@ -867,6 +874,7 @@ def load_portfolio_for_ai(path=os.path.join("data", "portfolio.csv")):
 def save_ai_decision_summary(priority_results):
 
     ai_start = time.perf_counter()
+    decisions = pd.DataFrame()
 
     try:
         decisions = build_ai_decisions(
@@ -902,7 +910,143 @@ def save_ai_decision_summary(priority_results):
             f"WARNING: AI Decision Engine failed, scanner output preserved: {exc}"
         )
 
-    return time.perf_counter() - ai_start
+    return decisions, time.perf_counter() - ai_start
+
+
+def account_context_from_portfolio(portfolio, config):
+
+    account = {
+        "AccountEquity": config.account_equity,
+        "AvailableCash": config.available_cash,
+    }
+
+    if portfolio is None or portfolio.empty:
+        return account
+
+    data = portfolio.copy()
+
+    if "Status" in data.columns:
+        open_positions = data[
+            data["Status"].fillna("").astype(str).str.upper() == "OPEN"
+        ].copy()
+    else:
+        open_positions = data.copy()
+
+    if open_positions.empty:
+        account["TotalExposure"] = 0
+        account["OpenPositions"] = 0
+        return account
+
+    for column in [
+        "CurrentValue",
+        "NetCost",
+        "BuyAmount",
+    ]:
+        if column in open_positions.columns:
+            values = pd.to_numeric(
+                open_positions[column],
+                errors="coerce",
+            ).fillna(0)
+            total = float(values.sum())
+
+            if total > 0:
+                account["TotalExposure"] = total
+                break
+    else:
+        account["TotalExposure"] = 0
+
+    account["OpenPositions"] = int(len(open_positions))
+
+    return account
+
+
+def save_risk_manager_summary(ai_decisions):
+
+    risk_start = time.perf_counter()
+
+    try:
+        config = load_risk_config()
+        portfolio = load_portfolio_for_ai()
+        account = account_context_from_portfolio(
+            portfolio,
+            config,
+        )
+        proposals = build_order_proposals(
+            ai_decisions,
+            portfolio_dataframe=portfolio,
+            account=account,
+            config=config,
+        )
+        proposal_path = save_order_proposals(proposals)
+        summary = build_risk_summary(
+            proposals,
+            account=account,
+            config=config,
+        )
+        summary_path = save_risk_summary(summary)
+
+        print("\n========== RISK MANAGER SUMMARY ==========\n")
+
+        if proposals.empty:
+            print("No order proposals")
+        else:
+            pending = int((proposals["ProposalStatus"] == "PENDING_APPROVAL").sum())
+            rejected = int((proposals["ProposalStatus"] == "REJECTED").sum())
+            no_proposal = int((proposals["ProposalStatus"] == "NO_PROPOSAL").sum())
+            buy_value = float(
+                pd.to_numeric(
+                    proposals[
+                        proposals["ProposalAction"].isin(["BUY", "ADD"])
+                    ]["ProposedOrderValue"],
+                    errors="coerce",
+                )
+                .fillna(0)
+                .sum()
+            )
+            sell_value = float(
+                pd.to_numeric(
+                    proposals[
+                        proposals["ProposalAction"].isin(["REDUCE", "EXIT"])
+                    ]["ProposedOrderValue"],
+                    errors="coerce",
+                )
+                .fillna(0)
+                .sum()
+            )
+            projected_exposure = 0
+            available_cash_after = account.get("AvailableCash", config.available_cash)
+
+            if not summary.empty:
+                projected_exposure = float(
+                    summary.iloc[0].get(
+                        "ProjectedExposurePct",
+                        0,
+                    )
+                )
+                available_cash_after = float(
+                    summary.iloc[0].get(
+                        "EstimatedCashAfter",
+                        available_cash_after,
+                    )
+                )
+
+            print(f"Pending Approval: {pending}")
+            print(f"Rejected: {rejected}")
+            print(f"No Proposal: {no_proposal}")
+            print(f"BUY Value: {buy_value:,.2f}")
+            print(f"SELL Value: {sell_value:,.2f}")
+            print(f"Projected Exposure: {projected_exposure:,.2f}%")
+            print(f"Available Cash After: {available_cash_after:,.2f}")
+
+        print(f"\nSaved Order Proposals: {proposal_path}")
+        print(f"Saved Risk Summary: {summary_path}")
+
+    except Exception as exc:
+        print(
+            f"WARNING: Risk Manager failed, scanner output preserved: {exc}"
+        )
+
+    return time.perf_counter() - risk_start
 
 
 def show_scan_duration(scan_timings, total_time):
@@ -1140,7 +1284,8 @@ def main(
         df,
         market_quality,
     )
-    save_ai_decision_summary(df)
+    ai_decisions, _ = save_ai_decision_summary(df)
+    save_risk_manager_summary(ai_decisions)
 
     df = df.sort_values(
         by="PriorityScore"

@@ -27,6 +27,8 @@ data/price_cache/
 data/indicator_cache/
 output/*.csv
 output/ai_decisions.csv
+output/order_proposals.csv
+output/risk_summary.csv
 output/*.xlsx
 output/*.log
 data/strategy_history.csv

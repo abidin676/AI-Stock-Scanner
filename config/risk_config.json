@@ -1,0 +1,22 @@
+{
+  "account_equity": 100000.0,
+  "available_cash": 100000.0,
+  "risk_per_trade_pct": 1.0,
+  "max_position_pct": 15.0,
+  "max_total_exposure_pct": 80.0,
+  "max_sector_exposure_pct": 25.0,
+  "max_open_positions": 10,
+  "min_order_value": 1000.0,
+  "max_order_value": 15000.0,
+  "min_rr": 1.5,
+  "default_stop_loss_pct": 7.0,
+  "max_stop_loss_pct": 12.0,
+  "allow_add_position": true,
+  "allow_reduce_position": true,
+  "require_manual_approval": true,
+  "set_board_lot": 100,
+  "usa_fractional_shares": false,
+  "commission_pct": 0.157,
+  "minimum_commission": 0.0,
+  "slippage_pct": 0.1
+}

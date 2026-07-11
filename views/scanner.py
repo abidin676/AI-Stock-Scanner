@@ -26,6 +26,7 @@ from priority_engine import (
     load_priority_results,
     recommend_priority_mode,
 )
+from risk_manager import build_risk_summary
 from strategy_lifecycle import (
     get_state_transitions,
     load_lifecycle,
@@ -38,6 +39,8 @@ RESULT_XLSX_FILE = Path("output") / "scanner_results.xlsx"
 OPPORTUNITY_RESULT_FILE = Path("output") / "opportunity_results.csv"
 PRIORITY_RESULT_FILE = PRIORITY_FILE
 AI_DECISION_RESULT_FILE = Path("output") / "ai_decisions.csv"
+ORDER_PROPOSALS_FILE = Path("output") / "order_proposals.csv"
+RISK_SUMMARY_FILE = Path("output") / "risk_summary.csv"
 RESULT_FILES = [
     RESULT_CSV_FILE,
     RESULT_XLSX_FILE,
@@ -426,6 +429,65 @@ def load_ai_decisions_from_disk():
             f"Could not load AI decisions: {exc}"
         )
         return pd.DataFrame(), AI_DECISION_RESULT_FILE, True
+
+
+def load_order_proposals_from_disk():
+
+    if not ORDER_PROPOSALS_FILE.exists():
+        return pd.DataFrame(), ORDER_PROPOSALS_FILE, True
+
+    try:
+        return (
+            pd.read_csv(ORDER_PROPOSALS_FILE),
+            ORDER_PROPOSALS_FILE,
+            False,
+        )
+    except pd.errors.EmptyDataError:
+        return (
+            pd.DataFrame(),
+            ORDER_PROPOSALS_FILE,
+            False,
+        )
+    except Exception as exc:
+        st.warning(
+            f"Could not load order proposals: {exc}"
+        )
+        return pd.DataFrame(), ORDER_PROPOSALS_FILE, True
+
+
+def load_risk_summary_from_disk(proposals=None):
+
+    if RISK_SUMMARY_FILE.exists():
+        try:
+            return (
+                pd.read_csv(RISK_SUMMARY_FILE),
+                RISK_SUMMARY_FILE,
+                False,
+            )
+        except pd.errors.EmptyDataError:
+            return (
+                pd.DataFrame(),
+                RISK_SUMMARY_FILE,
+                False,
+            )
+        except Exception as exc:
+            st.warning(
+                f"Could not load risk summary: {exc}"
+            )
+
+    if proposals is not None and not proposals.empty:
+        try:
+            return (
+                build_risk_summary(proposals),
+                None,
+                True,
+            )
+        except Exception as exc:
+            st.warning(
+                f"Could not build fallback risk summary: {exc}"
+            )
+
+    return pd.DataFrame(), RISK_SUMMARY_FILE, True
 
 
 def ensure_strategy_columns(df):
@@ -4005,6 +4067,429 @@ def render_ai_decision_center():
     st.caption(f"Loaded AI decisions from {ai_path}")
 
 
+def normalize_order_proposals_frame(df):
+
+    data = df.copy()
+
+    defaults = {
+        "ProposalPriority": 5,
+        "ProposalId": "",
+        "Symbol": "",
+        "Market": "",
+        "SourceDecision": "",
+        "ProposalAction": "NONE",
+        "ProposalStatus": "NO_PROPOSAL",
+        "RiskApproved": False,
+        "ApprovalRequired": False,
+        "EntryPrice": 0,
+        "StopPrice": 0,
+        "TargetPrice": 0,
+        "StopDistancePct": 0,
+        "RewardDistancePct": 0,
+        "RiskRewardRatio": 0,
+        "RiskBudget": 0,
+        "ProposedQty": 0,
+        "ProposedOrderValue": 0,
+        "EstimatedCommission": 0,
+        "EstimatedSlippage": 0,
+        "EstimatedTotalCost": 0,
+        "CurrentPositionQty": 0,
+        "FinalPositionQty": 0,
+        "CurrentExposurePct": 0,
+        "ProjectedExposurePct": 0,
+        "PortfolioExposureAfterPct": 0,
+        "CashAfterOrder": 0,
+        "RiskLevel": "UNKNOWN",
+        "RiskScore": 0,
+        "RejectReason": "NONE",
+        "RiskWarnings": "",
+    }
+
+    for column, default in defaults.items():
+        if column not in data.columns:
+            data[column] = default
+
+    numeric_columns = [
+        "ProposalPriority",
+        "EntryPrice",
+        "StopPrice",
+        "TargetPrice",
+        "StopDistancePct",
+        "RewardDistancePct",
+        "RiskRewardRatio",
+        "RiskBudget",
+        "ProposedQty",
+        "ProposedOrderValue",
+        "EstimatedCommission",
+        "EstimatedSlippage",
+        "EstimatedTotalCost",
+        "CurrentPositionQty",
+        "FinalPositionQty",
+        "CurrentExposurePct",
+        "ProjectedExposurePct",
+        "PortfolioExposureAfterPct",
+        "CashAfterOrder",
+        "RiskScore",
+    ]
+
+    for column in numeric_columns:
+        data[column] = pd.to_numeric(
+            data[column],
+            errors="coerce",
+        ).fillna(0)
+
+    for column in [
+        "RiskApproved",
+        "ApprovalRequired",
+    ]:
+        data[column] = (
+            data[column]
+            .astype(str)
+            .str.upper()
+            .isin(
+                [
+                    "TRUE",
+                    "1",
+                    "YES",
+                ]
+            )
+        )
+
+    for column in [
+        "ProposalId",
+        "Symbol",
+        "Market",
+        "SourceDecision",
+        "ProposalAction",
+        "ProposalStatus",
+        "RiskLevel",
+        "RejectReason",
+        "RiskWarnings",
+    ]:
+        data[column] = (
+            data[column]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+        )
+
+    return data
+
+
+def risk_filter_options(df, column):
+
+    values = []
+
+    if column in df.columns:
+        values = sorted(
+            value
+            for value in df[column].dropna().astype(str).unique()
+            if value.strip()
+        )
+
+    return [
+        "ALL",
+    ] + values
+
+
+def render_risk_manager_center():
+
+    proposals, proposal_path, missing = load_order_proposals_from_disk()
+
+    st.subheader("Risk Manager & Order Proposals")
+    st.warning(
+        "Risk Manager Phase 1 creates proposals only. "
+        "No real or paper order is executed."
+    )
+
+    if missing:
+        st.info("Run Scanner first to create output/order_proposals.csv.")
+        return
+
+    if proposals.empty:
+        st.info("No order proposals found.")
+        return
+
+    proposals = normalize_order_proposals_frame(proposals)
+    risk_summary, summary_path, summary_fallback = load_risk_summary_from_disk(proposals)
+
+    if risk_summary.empty:
+        summary_row = {}
+    else:
+        summary_row = risk_summary.iloc[0].to_dict()
+
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric(
+        "Pending Approval",
+        int(safe_number(summary_row.get("PendingProposals", 0))),
+    )
+    c2.metric(
+        "Rejected",
+        int(safe_number(summary_row.get("RejectedProposals", 0))),
+    )
+    c3.metric(
+        "Proposed Buy",
+        f"{safe_number(summary_row.get('TotalProposedBuyValue', 0)):,.0f}",
+    )
+    c4.metric(
+        "Proposed Sell",
+        f"{safe_number(summary_row.get('TotalProposedSellValue', 0)):,.0f}",
+    )
+    c5.metric(
+        "Projected Exposure",
+        f"{safe_number(summary_row.get('ProjectedExposurePct', 0)):.2f}%",
+    )
+    c6.metric(
+        "Cash After",
+        f"{safe_number(summary_row.get('EstimatedCashAfter', 0)):,.0f}",
+    )
+
+    with st.expander("Risk Manager Filters", expanded=False):
+        c1, c2, c3 = st.columns(3)
+        market_filter = c1.selectbox(
+            "Market",
+            risk_filter_options(proposals, "Market"),
+            key="risk_market_filter",
+        )
+        action_filter = c2.multiselect(
+            "Proposal Action",
+            risk_filter_options(proposals, "ProposalAction"),
+            default=[
+                "ALL",
+            ],
+            key="risk_action_filter",
+        )
+        status_filter = c3.multiselect(
+            "Proposal Status",
+            risk_filter_options(proposals, "ProposalStatus"),
+            default=[
+                "ALL",
+            ],
+            key="risk_status_filter",
+        )
+
+        c1, c2, c3 = st.columns(3)
+        level_filter = c1.multiselect(
+            "Risk Level",
+            risk_filter_options(proposals, "RiskLevel"),
+            default=[
+                "ALL",
+            ],
+            key="risk_level_filter",
+        )
+        approved_filter = c2.selectbox(
+            "Risk Approved",
+            [
+                "ALL",
+                "TRUE",
+                "FALSE",
+            ],
+            key="risk_approved_filter",
+        )
+        approval_required_filter = c3.selectbox(
+            "Approval Required",
+            [
+                "ALL",
+                "TRUE",
+                "FALSE",
+            ],
+            key="risk_approval_required_filter",
+        )
+
+        c1, c2, c3 = st.columns(3)
+        symbol_search = c1.text_input(
+            "Search Symbol",
+            value="",
+            placeholder="AAPL, PTT, DUK",
+            key="risk_symbol_search",
+        )
+        max_risk_score = c2.slider(
+            "Maximum Risk Score",
+            min_value=0,
+            max_value=100,
+            value=100,
+            step=1,
+            key="risk_max_score",
+        )
+        min_order_value = c3.number_input(
+            "Minimum Proposed Order Value",
+            min_value=0.0,
+            value=0.0,
+            step=100.0,
+            key="risk_min_order_value",
+        )
+
+    filtered = proposals.copy()
+
+    if market_filter != "ALL":
+        filtered = filtered[
+            filtered["Market"] == market_filter
+        ]
+
+    if "ALL" not in action_filter:
+        filtered = filtered[
+            filtered["ProposalAction"].isin(action_filter)
+        ]
+
+    if "ALL" not in status_filter:
+        filtered = filtered[
+            filtered["ProposalStatus"].isin(status_filter)
+        ]
+
+    if "ALL" not in level_filter:
+        filtered = filtered[
+            filtered["RiskLevel"].isin(level_filter)
+        ]
+
+    if approved_filter != "ALL":
+        filtered = filtered[
+            filtered["RiskApproved"] == (approved_filter == "TRUE")
+        ]
+
+    if approval_required_filter != "ALL":
+        filtered = filtered[
+            filtered["ApprovalRequired"] == (approval_required_filter == "TRUE")
+        ]
+
+    filtered = filtered[
+        (filtered["RiskScore"] <= max_risk_score)
+        & (filtered["ProposedOrderValue"] >= min_order_value)
+    ]
+
+    if symbol_search.strip():
+        needles = [
+            symbol.strip().upper()
+            for symbol in symbol_search.split(",")
+            if symbol.strip()
+        ]
+
+        if needles:
+            filtered = filtered[
+                filtered["Symbol"]
+                .astype(str)
+                .str.upper()
+                .apply(
+                    lambda value: any(
+                        needle in value
+                        for needle in needles
+                    )
+                )
+            ]
+
+    filtered = filtered.sort_values(
+        [
+            "ProposalPriority",
+            "RiskApproved",
+            "RiskScore",
+        ],
+        ascending=[
+            True,
+            False,
+            False,
+        ],
+    )
+
+    st.markdown("**Order Proposal Queue**")
+
+    columns = [
+        "ProposalPriority",
+        "ProposalId",
+        "Symbol",
+        "Market",
+        "SourceDecision",
+        "ProposalAction",
+        "ProposalStatus",
+        "RiskApproved",
+        "EntryPrice",
+        "StopPrice",
+        "TargetPrice",
+        "RiskRewardRatio",
+        "ProposedQty",
+        "ProposedOrderValue",
+        "RiskBudget",
+        "ProjectedExposurePct",
+        "RiskLevel",
+        "RiskScore",
+        "RejectReason",
+        "RiskWarnings",
+        "ApprovalRequired",
+    ]
+    columns = [
+        column
+        for column in columns
+        if column in filtered.columns
+    ]
+
+    if filtered.empty:
+        st.info("No order proposals found for current filters.")
+        return
+
+    st.dataframe(
+        filtered[columns].head(100),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    with st.expander("Proposal Detail", expanded=False):
+        labels = [
+            f"{row.ProposalId} | {row.Symbol} | {row.ProposalAction} | {row.ProposalStatus}"
+            for row in filtered.itertuples()
+        ]
+        selected_label = st.selectbox(
+            "Select Proposal",
+            labels,
+            key="risk_detail_proposal",
+        )
+        row = filtered.iloc[labels.index(selected_label)]
+
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
+        c1.metric("Action", row["ProposalAction"])
+        c2.metric("Status", row["ProposalStatus"])
+        c3.metric("Entry", f"{safe_number(row['EntryPrice']):,.2f}")
+        c4.metric("Stop", f"{safe_number(row['StopPrice']):,.2f}")
+        c5.metric("Target", f"{safe_number(row['TargetPrice']):,.2f}")
+        c6.metric("RR", f"{safe_number(row['RiskRewardRatio']):.2f}")
+
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
+        c1.metric("Risk Budget", f"{safe_number(row['RiskBudget']):,.2f}")
+        c2.metric("Qty", f"{safe_number(row['ProposedQty']):,.2f}")
+        c3.metric("Order Value", f"{safe_number(row['ProposedOrderValue']):,.2f}")
+        c4.metric("Commission", f"{safe_number(row['EstimatedCommission']):,.2f}")
+        c5.metric("Slippage", f"{safe_number(row['EstimatedSlippage']):,.2f}")
+        c6.metric("Total Cost", f"{safe_number(row['EstimatedTotalCost']):,.2f}")
+
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
+        c1.metric("Current Qty", f"{safe_number(row['CurrentPositionQty']):,.2f}")
+        c2.metric("Final Qty", f"{safe_number(row['FinalPositionQty']):,.2f}")
+        c3.metric("Current Exp", f"{safe_number(row['CurrentExposurePct']):.2f}%")
+        c4.metric("Projected Exp", f"{safe_number(row['ProjectedExposurePct']):.2f}%")
+        c5.metric("Portfolio Exp", f"{safe_number(row['PortfolioExposureAfterPct']):.2f}%")
+        c6.metric("Cash After", f"{safe_number(row['CashAfterOrder']):,.2f}")
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Risk Score", f"{safe_number(row['RiskScore']):.1f}")
+        c2.metric("Risk Level", row["RiskLevel"])
+        c3.metric("Approval Required", str(bool(row["ApprovalRequired"])))
+
+        st.markdown("**Reject Reason**")
+        st.write(str(row["RejectReason"]) or "NONE")
+        st.markdown("**Warnings**")
+        st.write(str(row["RiskWarnings"]) or "None")
+
+    st.download_button(
+        "Export Order Proposals",
+        data=ORDER_PROPOSALS_FILE.read_bytes(),
+        file_name="order_proposals.csv",
+        mime="text/csv",
+    )
+    st.caption(f"Loaded order proposals from {proposal_path}")
+
+    if summary_path is not None:
+        st.caption(f"Loaded risk summary from {summary_path}")
+    elif summary_fallback:
+        st.caption("Risk summary calculated from order proposals.")
+
+
 def render_opportunity_export():
 
     if not OPPORTUNITY_RESULT_FILE.exists():
@@ -4207,6 +4692,7 @@ def render_todays_opportunities(
     render_top_seed_sections(seed_opportunities)
     render_buy_queue(seed_opportunities)
     render_ai_decision_center()
+    render_risk_manager_center()
     render_opportunity_export()
     render_opportunity_debug(
         opportunities,
