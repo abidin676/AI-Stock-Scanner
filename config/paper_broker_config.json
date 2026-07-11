@@ -1,8 +1,10 @@
 {
   "initial_cash": 100000.0,
+  "starting_cash": 100000.0,
   "fill_policy": "FULL_FILL",
   "price_source": "PROPOSAL_ENTRY",
   "default_slippage_pct": 0.1,
+  "slippage_pct": 0.1,
   "commission_pct": 0.157,
   "minimum_commission": 0.0,
   "allow_partial_fill": false,
@@ -11,10 +13,17 @@
   "reject_duplicate_execution": true,
   "allow_negative_cash": false,
   "allow_short_selling": false,
+  "allow_short": false,
   "allow_fractional_usa": false,
+  "allow_add": true,
+  "allow_reduce": true,
   "set_board_lot": 100,
+  "max_open_positions": 5,
+  "max_position_value_pct": 25.0,
+  "max_order_value_pct": 20.0,
+  "daily_loss_limit_pct": 3.0,
   "auto_mark_executed": true,
   "require_approved_status": true,
   "execution_mode": "MANUAL",
-  "paper_broker_version": "1.0"
+  "paper_broker_version": "2.0"
 }

@@ -41,7 +41,7 @@ from approval_queue import (
     ready_for_paper_broker,
     sync_approval_queue,
 )
-from paper_broker import load_paper_broker_config
+from paper_broker import load_daily_state, load_paper_broker_config
 from paper_portfolio import (
     calculate_portfolio_summary,
     load_paper_account,
@@ -1076,6 +1076,11 @@ def save_risk_manager_summary(ai_decisions):
                     paper_portfolio,
                     paper_account,
                 )
+                daily_state = load_daily_state(
+                    paper_account,
+                    paper_config,
+                    persist=False,
+                )
                 ready = ready_for_paper_broker(approval_queue)
                 executed_today = int(
                     (
@@ -1091,6 +1096,10 @@ def save_risk_manager_summary(ai_decisions):
                 print(f"Open Positions: {paper_summary.get('OpenPositions', 0)}")
                 print(f"Cash: {paper_summary.get('Cash', 0):,.2f}")
                 print(f"Total Equity: {paper_summary.get('TotalEquity', 0):,.2f}")
+                print(
+                    "Daily Loss Lock: "
+                    f"{'ON' if daily_state.get('LossLimitTriggered') else 'OFF'}"
+                )
 
         except Exception as exc:
             print(

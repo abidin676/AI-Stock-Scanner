@@ -15,10 +15,13 @@ data/approval_queue.csv
 data/fx_cache.csv
 data/paper_account.json
 data/paper_cash_ledger.csv
+data/paper_daily_state.csv
 data/paper_execution_history.csv
 data/paper_fills.csv
+data/paper_order_events.csv
 data/paper_orders.csv
 data/paper_portfolio.csv
+data/paper_positions.csv
 data/paper_trades.csv
 data/recommendation_history.csv
 tmp/
