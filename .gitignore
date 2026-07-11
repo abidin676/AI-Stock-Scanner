@@ -2,6 +2,7 @@
 
 __pycache__/
 **/__pycache__/
+.pytest_cache/
 *.pyc
 *.py[cod]
 *.pyo
@@ -9,6 +10,8 @@ __pycache__/
 # Runtime
 
 data/alert_history.csv
+data/fx_cache.csv
+data/recommendation_history.csv
 tmp/
 *.log
 
@@ -23,6 +26,7 @@ work/
 data/price_cache/
 data/indicator_cache/
 output/*.csv
+output/ai_decisions.csv
 output/*.xlsx
 output/*.log
 data/strategy_history.csv

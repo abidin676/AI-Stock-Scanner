@@ -12,6 +12,11 @@
 - Risk Manager
 - Notification System
 
+## v3.1
+- AI Decision Engine Phase 1 — Explainable deterministic decision layer
+- Decision support only, no broker execution
+- Prepared for Paper Trading, Risk Manager, and future broker integrations
+
 ## v1.0
 - Stable Scanner
 - Portfolio

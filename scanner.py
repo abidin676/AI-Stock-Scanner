@@ -32,6 +32,10 @@ from priority_engine import (
     apply_priority_mode,
     save_priority_results,
 )
+from ai_decision_engine import (
+    build_ai_decisions,
+    save_ai_decisions,
+)
 from config import (
     PERIOD,
     INTERVAL,
@@ -846,6 +850,61 @@ def save_priority_summary(opportunities, market_quality):
     return prioritized, time.perf_counter() - priority_start
 
 
+def load_portfolio_for_ai(path=os.path.join("data", "portfolio.csv")):
+
+    if not os.path.exists(path):
+        return None
+
+    try:
+        return pd.read_csv(path)
+    except Exception as exc:
+        print(
+            f"WARNING: Could not load portfolio for AI decisions: {exc}"
+        )
+        return None
+
+
+def save_ai_decision_summary(priority_results):
+
+    ai_start = time.perf_counter()
+
+    try:
+        decisions = build_ai_decisions(
+            priority_results,
+            portfolio_dataframe=load_portfolio_for_ai(),
+        )
+        output_path = save_ai_decisions(decisions)
+
+        print("\n========== AI DECISION SUMMARY ==========\n")
+
+        if decisions.empty or "AIDecision" not in decisions.columns:
+            print("No AI decisions")
+        else:
+            counts = decisions["AIDecision"].value_counts().to_dict()
+
+            for decision in [
+                "BUY",
+                "PREPARE",
+                "WATCH",
+                "HOLD",
+                "ADD",
+                "REDUCE",
+                "EXIT",
+                "AVOID",
+                "NO_ACTION",
+            ]:
+                print(f"{decision}: {int(counts.get(decision, 0))}")
+
+        print(f"\nSaved AI Decisions: {output_path}")
+
+    except Exception as exc:
+        print(
+            f"WARNING: AI Decision Engine failed, scanner output preserved: {exc}"
+        )
+
+    return time.perf_counter() - ai_start
+
+
 def show_scan_duration(scan_timings, total_time):
 
     if not scan_timings:
@@ -1081,6 +1140,7 @@ def main(
         df,
         market_quality,
     )
+    save_ai_decision_summary(df)
 
     df = df.sort_values(
         by="PriorityScore"

@@ -37,6 +37,7 @@ RESULT_CSV_FILE = Path("output") / "scanner_results.csv"
 RESULT_XLSX_FILE = Path("output") / "scanner_results.xlsx"
 OPPORTUNITY_RESULT_FILE = Path("output") / "opportunity_results.csv"
 PRIORITY_RESULT_FILE = PRIORITY_FILE
+AI_DECISION_RESULT_FILE = Path("output") / "ai_decisions.csv"
 RESULT_FILES = [
     RESULT_CSV_FILE,
     RESULT_XLSX_FILE,
@@ -401,6 +402,30 @@ def load_priority_results_from_disk():
             f"Could not load priority results: {exc}"
         )
         return pd.DataFrame(), PRIORITY_RESULT_FILE, True
+
+
+def load_ai_decisions_from_disk():
+
+    if not AI_DECISION_RESULT_FILE.exists():
+        return pd.DataFrame(), AI_DECISION_RESULT_FILE, True
+
+    try:
+        return (
+            pd.read_csv(AI_DECISION_RESULT_FILE),
+            AI_DECISION_RESULT_FILE,
+            False,
+        )
+    except pd.errors.EmptyDataError:
+        return (
+            pd.DataFrame(),
+            AI_DECISION_RESULT_FILE,
+            False,
+        )
+    except Exception as exc:
+        st.warning(
+            f"Could not load AI decisions: {exc}"
+        )
+        return pd.DataFrame(), AI_DECISION_RESULT_FILE, True
 
 
 def ensure_strategy_columns(df):
@@ -3623,6 +3648,363 @@ def render_buy_queue(opportunities):
         )
 
 
+def normalize_ai_decision_frame(df):
+
+    data = df.copy()
+
+    defaults = {
+        "Symbol": "",
+        "Market": "",
+        "AIDecision": "NO_ACTION",
+        "AIAction": "No Action",
+        "AIConfidence": 0,
+        "AIConviction": "NONE",
+        "AIPositionIntent": "NONE",
+        "AIEntryReadiness": "NOT_APPLICABLE",
+        "AIRiskLevel": "UNKNOWN",
+        "AIReason": "",
+        "AIPositiveFactors": "",
+        "AINegativeFactors": "",
+        "AIBlockers": "",
+        "AIReviewPriority": 5,
+        "AIRequiresApproval": False,
+        "StrategyScore": 0,
+        "OpportunityScore": 0,
+        "PriorityScore": 0,
+        "MarketQualityScore": 0,
+        "LifecycleState": "",
+    }
+
+    for column, default in defaults.items():
+        if column not in data.columns:
+            data[column] = default
+
+    for column in [
+        "AIConfidence",
+        "AIReviewPriority",
+        "StrategyScore",
+        "OpportunityScore",
+        "PriorityScore",
+        "MarketQualityScore",
+    ]:
+        data[column] = pd.to_numeric(
+            data[column],
+            errors="coerce",
+        ).fillna(0)
+
+    data["AIRequiresApproval"] = (
+        data["AIRequiresApproval"]
+        .astype(str)
+        .str.upper()
+        .isin(
+            [
+                "TRUE",
+                "1",
+                "YES",
+            ]
+        )
+    )
+
+    for column in [
+        "Symbol",
+        "Market",
+        "AIDecision",
+        "AIConviction",
+        "AIRiskLevel",
+        "LifecycleState",
+    ]:
+        data[column] = (
+            data[column]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+        )
+
+    return data
+
+
+def ai_filter_options(df, column):
+
+    values = []
+
+    if column in df.columns:
+        values = sorted(
+            value
+            for value in df[column].dropna().astype(str).unique()
+            if value.strip()
+        )
+
+    return [
+        "ALL",
+    ] + values
+
+
+def render_ai_decision_center():
+
+    ai_decisions, ai_path, missing = load_ai_decisions_from_disk()
+
+    st.subheader("AI Decision Center")
+    st.warning(
+        "AI Decision Engine Phase 1 provides decision support only. "
+        "No order is sent automatically."
+    )
+
+    if missing:
+        st.info("Run Scanner first to create output/ai_decisions.csv.")
+        return
+
+    if ai_decisions.empty:
+        st.info("No AI decisions found.")
+        return
+
+    ai_decisions = normalize_ai_decision_frame(ai_decisions)
+
+    top_row = ai_decisions.sort_values(
+        [
+            "AIReviewPriority",
+            "AIConfidence",
+        ],
+        ascending=[
+            True,
+            False,
+        ],
+    ).iloc[0]
+    buy_count = int((ai_decisions["AIDecision"] == "BUY").sum())
+    prepare_count = int((ai_decisions["AIDecision"] == "PREPARE").sum())
+    watch_count = int((ai_decisions["AIDecision"] == "WATCH").sum())
+    portfolio_actions = int(
+        ai_decisions["AIDecision"].isin(
+            [
+                "HOLD",
+                "ADD",
+                "REDUCE",
+                "EXIT",
+            ]
+        ).sum()
+    )
+    avg_confidence = safe_number(ai_decisions["AIConfidence"].mean())
+
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric(
+        "Top AI Decision",
+        f"{top_row['Symbol']} {top_row['AIDecision']}",
+    )
+    c2.metric("BUY", buy_count)
+    c3.metric("PREPARE", prepare_count)
+    c4.metric("WATCH", watch_count)
+    c5.metric("Portfolio Actions", portfolio_actions)
+    c6.metric("Avg Confidence", f"{avg_confidence:.1f}")
+
+    with st.expander("AI Decision Filters", expanded=False):
+        c1, c2, c3 = st.columns(3)
+        market_filter = c1.selectbox(
+            "Market",
+            ai_filter_options(ai_decisions, "Market"),
+            key="ai_decision_market_filter",
+        )
+        decision_filter = c2.multiselect(
+            "AI Decision",
+            ai_filter_options(ai_decisions, "AIDecision"),
+            default=[
+                "ALL",
+            ],
+            key="ai_decision_filter",
+        )
+        conviction_filter = c3.multiselect(
+            "AI Conviction",
+            ai_filter_options(ai_decisions, "AIConviction"),
+            default=[
+                "ALL",
+            ],
+            key="ai_conviction_filter",
+        )
+
+        c1, c2, c3 = st.columns(3)
+        risk_filter = c1.multiselect(
+            "AI Risk",
+            ai_filter_options(ai_decisions, "AIRiskLevel"),
+            default=[
+                "ALL",
+            ],
+            key="ai_risk_filter",
+        )
+        approval_filter = c2.selectbox(
+            "Requires Approval",
+            [
+                "ALL",
+                "TRUE",
+                "FALSE",
+            ],
+            key="ai_approval_filter",
+        )
+        min_confidence = c3.slider(
+            "Minimum AI Confidence",
+            min_value=0,
+            max_value=100,
+            value=0,
+            step=1,
+            key="ai_min_confidence",
+        )
+        symbol_search = st.text_input(
+            "Search Symbol",
+            value="",
+            placeholder="AAPL, PTT, DUK",
+            key="ai_symbol_search",
+        )
+
+    filtered = ai_decisions.copy()
+
+    if market_filter != "ALL":
+        filtered = filtered[
+            filtered["Market"] == market_filter
+        ]
+
+    if "ALL" not in decision_filter:
+        filtered = filtered[
+            filtered["AIDecision"].isin(decision_filter)
+        ]
+
+    if "ALL" not in conviction_filter:
+        filtered = filtered[
+            filtered["AIConviction"].isin(conviction_filter)
+        ]
+
+    if "ALL" not in risk_filter:
+        filtered = filtered[
+            filtered["AIRiskLevel"].isin(risk_filter)
+        ]
+
+    if approval_filter != "ALL":
+        required = approval_filter == "TRUE"
+        filtered = filtered[
+            filtered["AIRequiresApproval"] == required
+        ]
+
+    filtered = filtered[
+        filtered["AIConfidence"] >= min_confidence
+    ]
+
+    if symbol_search.strip():
+        needles = [
+            symbol.strip().upper()
+            for symbol in symbol_search.split(",")
+            if symbol.strip()
+        ]
+
+        if needles:
+            filtered = filtered[
+                filtered["Symbol"]
+                .astype(str)
+                .str.upper()
+                .apply(
+                    lambda value: any(
+                        needle in value
+                        for needle in needles
+                    )
+                )
+            ]
+
+    filtered = filtered.sort_values(
+        [
+            "AIReviewPriority",
+            "AIConfidence",
+            "PriorityRank"
+            if "PriorityRank" in filtered.columns
+            else "PriorityScore",
+        ],
+        ascending=[
+            True,
+            False,
+            True,
+        ],
+    )
+
+    st.markdown("**AI Action Queue**")
+
+    display_columns = [
+        "AIReviewPriority",
+        "Symbol",
+        "Market",
+        "AIDecision",
+        "AIConfidence",
+        "AIConviction",
+        "LifecycleState",
+        "PriorityScore",
+        "OpportunityScore",
+        "AIRiskLevel",
+        "AIReason",
+        "AIRequiresApproval",
+    ]
+    display_columns = [
+        column
+        for column in display_columns
+        if column in filtered.columns
+    ]
+
+    if filtered.empty:
+        st.info("No AI decisions found for current filters.")
+        return
+
+    st.dataframe(
+        filtered[display_columns].head(100),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    detail_labels = [
+        f"{row.Symbol} | {row.Market} | {row.AIDecision} | {row.AIConfidence:.1f}"
+        for row in filtered.itertuples()
+    ]
+
+    with st.expander("AI Decision Detail", expanded=False):
+        selected_label = st.selectbox(
+            "Select Symbol",
+            detail_labels,
+            key="ai_detail_symbol",
+        )
+        selected_index = detail_labels.index(selected_label)
+        row = filtered.iloc[selected_index]
+
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
+        c1.metric("Decision", row["AIDecision"])
+        c2.metric("Confidence", f"{safe_number(row['AIConfidence']):.1f}")
+        c3.metric("Conviction", row["AIConviction"])
+        c4.metric("Intent", row["AIPositionIntent"])
+        c5.metric("Readiness", row["AIEntryReadiness"])
+        c6.metric("Risk", row["AIRiskLevel"])
+
+        st.markdown("**Main Reason**")
+        st.write(str(row["AIReason"]))
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.markdown("**Positive Factors**")
+            st.write(str(row["AIPositiveFactors"]) or "N/A")
+        with c2:
+            st.markdown("**Negative Factors**")
+            st.write(str(row["AINegativeFactors"]) or "N/A")
+        with c3:
+            st.markdown("**Blockers**")
+            st.write(str(row["AIBlockers"]) or "None")
+
+        score_columns = [
+            "StrategyScore",
+            "OpportunityScore",
+            "PriorityScore",
+            "MarketQualityScore",
+        ]
+        score_data = {
+            column: safe_number(row.get(column, 0))
+            for column in score_columns
+            if column in row.index
+        }
+
+        st.markdown("**Score Context**")
+        st.json(score_data)
+
+    st.caption(f"Loaded AI decisions from {ai_path}")
+
+
 def render_opportunity_export():
 
     if not OPPORTUNITY_RESULT_FILE.exists():
@@ -3824,6 +4206,7 @@ def render_todays_opportunities(
     )
     render_top_seed_sections(seed_opportunities)
     render_buy_queue(seed_opportunities)
+    render_ai_decision_center()
     render_opportunity_export()
     render_opportunity_debug(
         opportunities,
