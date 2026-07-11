@@ -17,6 +17,7 @@
 - Decision support only, no broker execution
 - Prepared for Paper Trading, Risk Manager, and future broker integrations
 - Risk Manager Phase 1 — Position sizing, portfolio constraints and approval-gated order proposals
+- Approval Queue Phase 1 — Manual approval gate before Paper Broker integration
 
 ## v1.0
 - Stable Scanner

@@ -10,6 +10,8 @@ __pycache__/
 # Runtime
 
 data/alert_history.csv
+data/approval_history.csv
+data/approval_queue.csv
 data/fx_cache.csv
 data/recommendation_history.csv
 tmp/

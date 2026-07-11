@@ -36,6 +36,10 @@ from ai_decision_engine import (
     build_ai_decisions,
     save_ai_decisions,
 )
+from approval_queue import (
+    build_approval_summary,
+    sync_approval_queue,
+)
 from risk_manager import (
     build_order_proposals,
     build_risk_summary,
@@ -1040,6 +1044,28 @@ def save_risk_manager_summary(ai_decisions):
 
         print(f"\nSaved Order Proposals: {proposal_path}")
         print(f"Saved Risk Summary: {summary_path}")
+
+        try:
+            approval_queue, _ = sync_approval_queue(proposals)
+            approval_summary = build_approval_summary(approval_queue)
+
+            if not approval_summary.empty:
+                approval_row = approval_summary.iloc[0]
+                print("\n========== APPROVAL QUEUE SUMMARY ==========\n")
+                print(f"Pending: {int(approval_row.get('Pending', 0))}")
+                print(f"Approved: {int(approval_row.get('Approved', 0))}")
+                print(f"Rejected: {int(approval_row.get('Rejected', 0))}")
+                print(f"Expired: {int(approval_row.get('Expired', 0))}")
+                print(f"Cancelled: {int(approval_row.get('Cancelled', 0))}")
+                print(
+                    "Ready For Paper Broker: "
+                    f"{int(approval_row.get('ReadyForPaperBroker', 0))}"
+                )
+
+        except Exception as exc:
+            print(
+                f"WARNING: Approval Queue failed, scanner output preserved: {exc}"
+            )
 
     except Exception as exc:
         print(

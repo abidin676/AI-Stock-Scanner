@@ -1,5 +1,6 @@
 import streamlit as st
 
+from views.approval_queue import approval_queue_page
 from views.backtest import backtest_page
 from views.portfolio import portfolio_page
 from views.scanner import scanner_page
@@ -18,12 +19,15 @@ page = st.sidebar.radio(
         "Scanner",
         "Watchlist",
         "Portfolio",
+        "Approval Queue",
         "Strategy Lab",
     ],
 )
 
 if page == "Strategy Lab":
     backtest_page()
+elif page == "Approval Queue":
+    approval_queue_page()
 elif page == "Portfolio":
     portfolio_page()
 elif page == "Watchlist":
