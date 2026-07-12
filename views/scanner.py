@@ -4511,6 +4511,211 @@ def ai_filter_options(df, column):
     ] + values
 
 
+AI_MAIN_ACTIONS = [
+    "BUY",
+    "PREPARE",
+    "WATCH",
+    "EXIT",
+]
+
+AI_ACTION_ORDER = {
+    "BUY": 1,
+    "PREPARE": 2,
+    "EXIT": 3,
+    "HOLD": 4,
+    "WATCH": 5,
+}
+
+AI_ACTION_LABELS = {
+    "BUY": "🟢 ซื้อได้",
+    "PREPARE": "🟡 ใกล้ซื้อ",
+    "WATCH": "👀 เฝ้าดู",
+    "HOLD": "🔵 ถือ",
+    "EXIT": "🔴 ขาย",
+    "NONE": "⚪ ยังไม่ทำอะไร",
+    "NO_ACTION": "⚪ ยังไม่ทำอะไร",
+    "SKIP": "⚪ ยังไม่ทำอะไร",
+    "AVOID": "⚪ ยังไม่ทำอะไร",
+}
+
+AI_ADVANCED_COLUMNS = [
+    "AIReviewPriority",
+    "Symbol",
+    "Market",
+    "AIDecision",
+    "AIConfidence",
+    "AIConviction",
+    "LifecycleState",
+    "PriorityScore",
+    "OpportunityScore",
+    "AIRiskLevel",
+    "AIReason",
+]
+
+AI_SIMPLE_COLUMNS = [
+    "Symbol",
+    "Action",
+    "AI Score",
+    "Risk",
+    "Reason",
+]
+
+
+def ai_action_key(value):
+
+    action = str(value or "NO_ACTION").strip().upper()
+    if action == "":
+        return "NO_ACTION"
+    return action
+
+
+def ai_action_label(value):
+
+    return AI_ACTION_LABELS.get(
+        ai_action_key(value),
+        AI_ACTION_LABELS["NO_ACTION"],
+    )
+
+
+def ai_summary_counts(df):
+
+    data = normalize_ai_decision_frame(df)
+    decisions = data["AIDecision"].astype(str).str.upper()
+
+    return {
+        action: int((decisions == action).sum())
+        for action in AI_MAIN_ACTIONS
+    }
+
+
+def ai_empty_state_message(counts):
+
+    if int(counts.get("BUY", 0) or 0) != 0:
+        return ""
+
+    message = "วันนี้ยังไม่มีหุ้นที่ AI แนะนำให้ซื้อ"
+    prepare_count = int(counts.get("PREPARE", 0) or 0)
+    if prepare_count > 0:
+        message += f"\n\nมี {prepare_count} ตัวใกล้เข้าเงื่อนไขซื้อ"
+    return message
+
+
+def shorten_ai_reason(reason, action=""):
+
+    text = str(reason or "").strip()
+    action_key = ai_action_key(action)
+    lowered = text.lower()
+
+    if "scanner" in lowered and "skip" in lowered:
+        return "สถานะ Scanner เป็น SKIP"
+    if "skip" in lowered:
+        return "สถานะ Scanner เป็น SKIP"
+    if "volume" in lowered or "rvol" in lowered:
+        return "รอ Volume"
+    if "breakout" in lowered or "pivot" in lowered:
+        return "รอ Breakout"
+    if "trend" in lowered or "confirm" in lowered or "confirmation" in lowered:
+        return "แนวโน้มยังไม่ยืนยัน"
+    if "below stop" in lowered or "stop" in lowered or "exit" in lowered:
+        return "หลุดแนวโน้ม"
+    if "risk" in lowered or "extended" in lowered or "chasing" in lowered:
+        return "ความเสี่ยงสูง"
+    if "ready" in lowered or "buy" in lowered or "approval" in lowered:
+        return "พร้อมเข้าซื้อ"
+
+    if not text:
+        if action_key == "BUY":
+            return "พร้อมเข้าซื้อ"
+        if action_key == "PREPARE":
+            return "รอ Breakout"
+        if action_key == "WATCH":
+            return "เฝ้าดูต่อ"
+        if action_key == "EXIT":
+            return "หลุดแนวโน้ม"
+        return "ยังไม่เข้าเงื่อนไข"
+
+    return text[:77] + "..." if len(text) > 80 else text
+
+
+def ai_sort_frame(df):
+
+    data = normalize_ai_decision_frame(df)
+    data["_AIActionOrder"] = (
+        data["AIDecision"]
+        .astype(str)
+        .str.upper()
+        .map(AI_ACTION_ORDER)
+        .fillna(99)
+    )
+    if "PriorityRank" not in data.columns:
+        data["PriorityRank"] = data["PriorityScore"]
+    data["PriorityRank"] = pd.to_numeric(
+        data["PriorityRank"],
+        errors="coerce",
+    ).fillna(999999)
+
+    return data.sort_values(
+        [
+            "_AIActionOrder",
+            "AIReviewPriority",
+            "AIConfidence",
+            "PriorityRank",
+        ],
+        ascending=[
+            True,
+            True,
+            False,
+            True,
+        ],
+    ).drop(columns=["_AIActionOrder"])
+
+
+def build_ai_simple_table(df, show_all_watch=False):
+
+    data = ai_sort_frame(df)
+    if data.empty:
+        return pd.DataFrame(columns=AI_SIMPLE_COLUMNS)
+
+    if not show_all_watch:
+        watch_mask = data["AIDecision"].astype(str).str.upper() == "WATCH"
+        watch_rows = data[watch_mask].head(20)
+        non_watch_rows = data[~watch_mask]
+        data = pd.concat(
+            [
+                non_watch_rows,
+                watch_rows,
+            ],
+            ignore_index=True,
+        )
+        data = ai_sort_frame(data)
+
+    simple = pd.DataFrame(
+        {
+            "Symbol": data["Symbol"],
+            "Action": data["AIDecision"].apply(ai_action_label),
+            "AI Score": data["AIConfidence"],
+            "Risk": data["AIRiskLevel"],
+            "Reason": [
+                shorten_ai_reason(reason, action)
+                for reason, action in zip(
+                    data["AIReason"],
+                    data["AIDecision"],
+                )
+            ],
+        }
+    )
+    return simple[AI_SIMPLE_COLUMNS]
+
+
+def build_ai_advanced_table(df):
+
+    data = normalize_ai_decision_frame(df)
+    for column in AI_ADVANCED_COLUMNS:
+        if column not in data.columns:
+            data[column] = ""
+    return data[AI_ADVANCED_COLUMNS].copy()
+
+
 def render_ai_decision_center():
 
     ai_decisions, ai_path, missing = load_ai_decisions_from_disk()
@@ -4530,42 +4735,17 @@ def render_ai_decision_center():
         return
 
     ai_decisions = normalize_ai_decision_frame(ai_decisions)
+    counts = ai_summary_counts(ai_decisions)
 
-    top_row = ai_decisions.sort_values(
-        [
-            "AIReviewPriority",
-            "AIConfidence",
-        ],
-        ascending=[
-            True,
-            False,
-        ],
-    ).iloc[0]
-    buy_count = int((ai_decisions["AIDecision"] == "BUY").sum())
-    prepare_count = int((ai_decisions["AIDecision"] == "PREPARE").sum())
-    watch_count = int((ai_decisions["AIDecision"] == "WATCH").sum())
-    portfolio_actions = int(
-        ai_decisions["AIDecision"].isin(
-            [
-                "HOLD",
-                "ADD",
-                "REDUCE",
-                "EXIT",
-            ]
-        ).sum()
-    )
-    avg_confidence = safe_number(ai_decisions["AIConfidence"].mean())
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("🟢 BUY", counts["BUY"])
+    c2.metric("🟡 PREPARE", counts["PREPARE"])
+    c3.metric("👀 WATCH", counts["WATCH"])
+    c4.metric("🔴 EXIT", counts["EXIT"])
 
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
-    c1.metric(
-        "Top AI Decision",
-        f"{top_row['Symbol']} {top_row['AIDecision']}",
-    )
-    c2.metric("BUY", buy_count)
-    c3.metric("PREPARE", prepare_count)
-    c4.metric("WATCH", watch_count)
-    c5.metric("Portfolio Actions", portfolio_actions)
-    c6.metric("Avg Confidence", f"{avg_confidence:.1f}")
+    message = ai_empty_state_message(counts)
+    if message:
+        st.info(message)
 
     with st.expander("AI Decision Filters", expanded=False):
         c1, c2, c3 = st.columns(3)
@@ -4624,6 +4804,12 @@ def render_ai_decision_center():
             key="ai_symbol_search",
         )
 
+    show_all_watch = st.checkbox(
+        "Show all WATCH candidates",
+        value=False,
+        key="ai_show_all_watch",
+    )
+
     filtered = ai_decisions.copy()
 
     if market_filter != "ALL":
@@ -4676,52 +4862,52 @@ def render_ai_decision_center():
                 )
             ]
 
-    filtered = filtered.sort_values(
-        [
-            "AIReviewPriority",
-            "AIConfidence",
-            "PriorityRank"
-            if "PriorityRank" in filtered.columns
-            else "PriorityScore",
-        ],
-        ascending=[
-            True,
-            False,
-            True,
-        ],
-    )
+    filtered = ai_sort_frame(filtered)
 
     st.markdown("**AI Action Queue**")
-
-    display_columns = [
-        "AIReviewPriority",
-        "Symbol",
-        "Market",
-        "AIDecision",
-        "AIConfidence",
-        "AIConviction",
-        "LifecycleState",
-        "PriorityScore",
-        "OpportunityScore",
-        "AIRiskLevel",
-        "AIReason",
-        "AIRequiresApproval",
-    ]
-    display_columns = [
-        column
-        for column in display_columns
-        if column in filtered.columns
-    ]
 
     if filtered.empty:
         st.info("No AI decisions found for current filters.")
         return
 
+    simple_table = build_ai_simple_table(
+        filtered,
+        show_all_watch=show_all_watch,
+    )
     st.dataframe(
-        filtered[display_columns].head(100),
+        simple_table,
         use_container_width=True,
         hide_index=True,
     )
+
+    with st.expander("Advanced Details", expanded=False):
+        advanced_sorted = ai_sort_frame(ai_decisions)
+        top_row = advanced_sorted.iloc[0]
+        portfolio_actions = int(
+            ai_decisions["AIDecision"].isin(
+                [
+                    "HOLD",
+                    "ADD",
+                    "REDUCE",
+                    "EXIT",
+                ]
+            ).sum()
+        )
+        avg_confidence = safe_number(ai_decisions["AIConfidence"].mean())
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric(
+            "Top AI Decision",
+            f"{top_row['Symbol']} {top_row['AIDecision']}",
+        )
+        c2.metric("Portfolio Actions", portfolio_actions)
+        c3.metric("Avg Confidence", f"{avg_confidence:.1f}")
+
+        st.dataframe(
+            build_ai_advanced_table(filtered),
+            use_container_width=True,
+            hide_index=True,
+        )
 
     detail_labels = [
         f"{row.Symbol} | {row.Market} | {row.AIDecision} | {row.AIConfidence:.1f}"
