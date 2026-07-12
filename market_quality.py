@@ -3,6 +3,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from runtime_io import atomic_write_csv
+
 
 MARKET_QUALITY_FILE = Path("output") / "market_quality.csv"
 MARKET_QUALITY_COLUMNS = [
@@ -26,6 +28,7 @@ MARKET_QUALITY_COLUMNS = [
     "PullbackCount",
     "QualityScore",
     "QualityLabel",
+    "ScanRunId",
 ]
 
 
@@ -198,6 +201,7 @@ def calculate_market_quality(
     scan_time_seconds=None,
     last_scan_time=None,
     markets=("SET", "USA"),
+    scan_run_id=None,
 ):
 
     scan_time_seconds = normalize_scan_seconds(
@@ -213,6 +217,17 @@ def calculate_market_quality(
         results = pd.DataFrame()
 
     df = normalize_strategy_columns(results)
+    if scan_run_id is None and "ScanRunId" in df.columns:
+        scan_run_ids = (
+            df["ScanRunId"]
+            .dropna()
+            .astype(str)
+            .replace("", pd.NA)
+            .dropna()
+            .unique()
+            .tolist()
+        )
+        scan_run_id = scan_run_ids[0] if scan_run_ids else ""
 
     if "Market" not in df.columns:
         df["Market"] = ""
@@ -344,6 +359,7 @@ def calculate_market_quality(
             "PullbackCount": pullback_count,
             "QualityScore": quality_score,
             "QualityLabel": quality_label(quality_score),
+            "ScanRunId": scan_run_id or "",
         })
 
     return pd.DataFrame(
@@ -397,7 +413,8 @@ def save_market_quality(quality, path=MARKET_QUALITY_FILE):
         ],
         ignore_index=True,
     )
-    combined.to_csv(
+    atomic_write_csv(
+        combined,
         path,
         index=False,
     )

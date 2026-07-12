@@ -2,6 +2,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from runtime_io import atomic_write_csv
+
 
 OPPORTUNITY_FILE = Path("output") / "opportunity_results.csv"
 
@@ -1574,7 +1576,8 @@ def save_opportunities(opportunities, path=OPPORTUNITY_FILE):
     path.parent.mkdir(
         exist_ok=True
     )
-    opportunities.to_csv(
+    atomic_write_csv(
+        opportunities,
         path,
         index=False,
     )

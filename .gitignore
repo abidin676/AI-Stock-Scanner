@@ -26,6 +26,8 @@ data/paper_trades.csv
 data/recommendation_history.csv
 tmp/
 *.log
+data/.*.tmp.*
+output/.*.tmp.*
 
 # Virtual Environment
 
@@ -42,6 +44,8 @@ output/ai_decisions.csv
 output/order_proposals.csv
 output/risk_summary.csv
 output/*.xlsx
+output/scan_metadata.json
+output/scan_run_manifest.json
 output/*.log
 data/strategy_history.csv
 data/strategy_lifecycle.csv

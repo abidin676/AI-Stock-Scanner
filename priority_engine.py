@@ -2,6 +2,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from runtime_io import atomic_write_csv
+
 
 PRIORITY_FILE = Path("output") / "priority_results.csv"
 
@@ -23,6 +25,10 @@ PRIORITY_COLUMNS = [
     "PriorityRank",
     "PriorityAction",
     "PriorityReasons",
+    "PriorityBaseScore",
+    "PriorityBonuses",
+    "PriorityPenalties",
+    "PriorityReason",
     "AIRecommendedPriority",
     "AIRecommendationReason",
 ]
@@ -1492,6 +1498,13 @@ def apply_priority_mode(
                 row,
                 mode,
             ),
+            "PriorityBaseScore": score,
+            "PriorityBonuses": "",
+            "PriorityPenalties": "",
+            "PriorityReason": get_priority_reasons(
+                row,
+                mode,
+            ),
             "AIRecommendedPriority": (
                 ai_recommended_priority or mode
             ),
@@ -1703,7 +1716,8 @@ def save_priority_results(priority_results, path=PRIORITY_FILE):
     path.parent.mkdir(
         exist_ok=True
     )
-    priority_results.to_csv(
+    atomic_write_csv(
+        priority_results,
         path,
         index=False,
     )

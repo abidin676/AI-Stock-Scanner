@@ -7,6 +7,8 @@ from typing import Any, Mapping
 
 import pandas as pd
 
+from runtime_io import atomic_write_csv
+
 
 AI_DECISIONS_FILE = Path("output") / "ai_decisions.csv"
 AIDECISION_VERSION = "1.0"
@@ -23,6 +25,7 @@ AI_COLUMNS = [
     "AIPositiveFactors",
     "AINegativeFactors",
     "AIBlockers",
+    "AISuggestedAction",
     "AIReviewPriority",
     "AIRequiresApproval",
     "AIDecisionVersion",
@@ -70,6 +73,18 @@ APPROVAL_DECISIONS = {
     "ADD",
     "REDUCE",
     "EXIT",
+}
+
+SUGGESTED_ACTIONS = {
+    "BUY": "BUY_SUPPORT",
+    "PREPARE": "PREPARE",
+    "WATCH": "WATCH",
+    "AVOID": "AVOID",
+    "NO_ACTION": "NO_ACTION",
+    "HOLD": "NO_ACTION",
+    "ADD": "BUY_SUPPORT",
+    "REDUCE": "NO_ACTION",
+    "EXIT": "AVOID",
 }
 
 SEVERE_BLOCKERS = {
@@ -883,6 +898,17 @@ def make_ai_decision(
             cfg,
         )
 
+    queue_class = safe_text(row_data.get("QueueClass")).upper()
+    if not portfolio_context["has_position"] and queue_class:
+        if queue_class == "BUY":
+            decision = "BUY"
+        elif queue_class == "PREPARE":
+            decision = "PREPARE"
+        elif queue_class == "WATCH":
+            decision = "WATCH"
+        elif queue_class == "IGNORE" and decision in {"BUY", "PREPARE"}:
+            decision = "AVOID"
+
     conviction = classify_conviction(
         confidence,
         blockers,
@@ -909,6 +935,10 @@ def make_ai_decision(
         "AIPositiveFactors": "; ".join(positives),
         "AINegativeFactors": "; ".join(negatives),
         "AIBlockers": "; ".join(blockers),
+        "AISuggestedAction": SUGGESTED_ACTIONS.get(
+            decision,
+            "NO_ACTION",
+        ),
         "AIReviewPriority": review_priority(
             decision,
             confidence,
@@ -1070,7 +1100,8 @@ def save_ai_decisions(
     path.parent.mkdir(
         exist_ok=True
     )
-    decisions.to_csv(
+    atomic_write_csv(
+        decisions,
         path,
         index=False,
     )

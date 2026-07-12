@@ -1,0 +1,23 @@
+{
+  "policy_version": "decision_pipeline_phase_1",
+  "_description": {
+    "buy_min_priority_score": "Minimum PriorityScore for actionable BUY queue candidates.",
+    "buy_min_rr": "Minimum risk/reward ratio for actionable BUY queue candidates.",
+    "prepare_min_seed_score": "Minimum SeedScore for PREPARE/watchlist-stage candidates.",
+    "prepare_min_priority_score": "Minimum PriorityScore for PREPARE candidates.",
+    "prepare_min_rr": "Minimum risk/reward ratio for PREPARE candidates.",
+    "watch_min_opportunity_score": "Minimum OpportunityScore for WATCH queue candidates when no hard block exists.",
+    "ai_confidence_warning_threshold": "Below this value AI confidence is a warning, not a hard veto.",
+    "extended_is_hard_block": "When true, extended/chasing setups cannot enter actionable queues."
+  },
+  "buy_min_priority_score": 70,
+  "buy_min_rr": 1.8,
+  "prepare_min_seed_score": 80,
+  "prepare_min_priority_score": 55,
+  "prepare_min_rr": 1.5,
+  "watch_min_opportunity_score": 45,
+  "ai_confidence_warning_threshold": 55,
+  "extended_is_hard_block": true,
+  "allowed_buy_lifecycle_states": ["SEED", "EARLY", "BREAKOUT", "MOMENTUM", "BUY"],
+  "allowed_prepare_lifecycle_states": ["SEED", "EARLY", "WATCH", "ACCUMULATION", "BASE", "BOTTOMING"]
+}

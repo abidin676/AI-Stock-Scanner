@@ -2,13 +2,15 @@ import os
 import time
 import argparse
 import sys
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from collections import defaultdict
 import pandas as pd
 
 from providers.thai import get_symbols
-from data import get_histories
+from candidate_eligibility import apply_eligibility_policy
+from data import get_histories, is_price_cache_fresh, price_cache_path
 from indicators import add_indicators_cached
 from strategy import trend_start
 from strategy_modes import (
@@ -54,6 +56,8 @@ from risk_manager import (
     save_order_proposals,
     save_risk_summary,
 )
+from runtime_io import atomic_write_csv, atomic_write_excel
+from scan_metadata import build_scan_metadata, save_scan_manifest, save_scan_metadata
 from config import (
     PERIOD,
     INTERVAL,
@@ -71,6 +75,23 @@ PROFILE_FILE = os.path.join(
     OUTPUT_DIR,
     "scanner_profile.csv",
 )
+SCAN_FAILURES_FILE = os.path.join(
+    OUTPUT_DIR,
+    "scan_failures.csv",
+)
+SCAN_OUTPUT_FILES = [
+    os.path.join(OUTPUT_DIR, CSV_FILE),
+    os.path.join(OUTPUT_DIR, EXCEL_FILE),
+    os.path.join(OUTPUT_DIR, "market_quality.csv"),
+    os.path.join(OUTPUT_DIR, "opportunity_results.csv"),
+    os.path.join(OUTPUT_DIR, "priority_results.csv"),
+    os.path.join(OUTPUT_DIR, "ai_decisions.csv"),
+    os.path.join(OUTPUT_DIR, "order_proposals.csv"),
+    os.path.join(OUTPUT_DIR, "risk_summary.csv"),
+    os.path.join(OUTPUT_DIR, "scan_metadata.json"),
+    os.path.join(OUTPUT_DIR, "scan_failures.csv"),
+    os.path.join(OUTPUT_DIR, "scan_run_manifest.json"),
+]
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -178,6 +199,105 @@ def strategy_signal_group(signal):
         return "SKIP"
 
     return "OTHER"
+
+
+def output_file_timestamps(paths):
+
+    timestamps = {}
+
+    for path in paths:
+        if not os.path.exists(path):
+            timestamps[path] = "MISSING"
+            continue
+
+        timestamps[path] = datetime.fromtimestamp(
+            os.path.getmtime(path)
+        ).strftime("%Y-%m-%d %H:%M:%S")
+
+    return timestamps
+
+
+def market_diagnostic_totals(scan_metadata):
+
+    diagnostics = scan_metadata.get(
+        "MarketDiagnostics",
+        {},
+    )
+    values = list(diagnostics.values())
+
+    return {
+        "RequestedSymbolCount": sum(int(item.get("RequestedSymbols", 0) or 0) for item in values),
+        "DownloadedCount": sum(int(item.get("DownloadedSymbols", 0) or 0) for item in values),
+        "ProcessedCount": sum(int(item.get("ProcessedRows", 0) or 0) for item in values),
+        "FailedCount": sum(int(item.get("FailedSymbols", 0) or 0) for item in values),
+        "CompletedMarkets": [
+            item.get("Market")
+            for item in values
+            if item.get("Status") in {"OK", "PARTIAL"}
+            and int(item.get("ProcessedRows", 0) or 0) > 0
+        ],
+    }
+
+
+def build_scan_manifest(
+    scan_metadata,
+    started_at,
+    completed_at,
+    mode,
+    strategy_mode,
+    force_refresh,
+    workers,
+    scanner_rows,
+    opportunity_rows,
+    priority_rows,
+    ai_rows,
+    proposal_rows,
+):
+
+    totals = market_diagnostic_totals(scan_metadata)
+
+    return {
+        "ScanRunId": scan_metadata.get("ScanRunId", ""),
+        "StartedAt": started_at,
+        "CompletedAt": completed_at,
+        "RequestedMode": scan_metadata.get("RequestedScanMode", mode),
+        "RequestedMarkets": scan_metadata.get("ExpectedMarkets", []),
+        "CompletedMarkets": totals["CompletedMarkets"],
+        "StrategyMode": strategy_mode_label(strategy_mode),
+        "ForceRefresh": bool(force_refresh),
+        "Workers": int(workers or MAX_WORKERS),
+        "RequestedSymbolCount": totals["RequestedSymbolCount"],
+        "DownloadedCount": totals["DownloadedCount"],
+        "ProcessedCount": totals["ProcessedCount"],
+        "FailedCount": totals["FailedCount"],
+        "ScannerRowCount": int(scanner_rows),
+        "OpportunityRowCount": int(opportunity_rows),
+        "PriorityRowCount": int(priority_rows),
+        "AIDecisionRowCount": int(ai_rows),
+        "OrderProposalRowCount": int(proposal_rows),
+        "Status": scan_metadata.get("ScanStatus", "UNKNOWN"),
+        "ErrorSummary": " | ".join(scan_metadata.get("Warnings", [])),
+        "OutputFileTimestamps": output_file_timestamps(SCAN_OUTPUT_FILES),
+    }
+
+
+def save_scan_failures(failures):
+
+    columns = [
+        "ScanRunId",
+        "Index",
+        "Market",
+        "Symbol",
+        "Reason",
+        "Detail",
+    ]
+    data = pd.DataFrame(failures, columns=columns)
+    atomic_write_csv(
+        data,
+        SCAN_FAILURES_FILE,
+        index=False,
+    )
+    return SCAN_FAILURES_FILE
 
 
 def normalize_scan_mode(mode):
@@ -447,9 +567,29 @@ def scan_market(
             market,
         )
     )
+    provider_name = (
+        "providers.thai.get_symbols"
+        if market == "SET"
+        else "providers.usa.get_symbols"
+    )
+    cached_count = 0
+    download_count = 0
+
+    for symbol in symbols:
+        cache_path = price_cache_path(
+            symbol,
+            market,
+            PERIOD,
+            INTERVAL,
+        )
+        if not force_refresh and is_price_cache_fresh(cache_path):
+            cached_count += 1
+        else:
+            download_count += 1
 
     results = []
     payloads = []
+    failures = []
     total_start = time.perf_counter()
 
     print(f"\n========== SCANNING {index} ==========\n")
@@ -466,6 +606,12 @@ def scan_market(
         force_refresh=force_refresh,
     )
     download_time = time.perf_counter() - download_start
+    loaded_count = sum(
+        1
+        for symbol in symbols
+        if not histories.get(symbol, pd.DataFrame()).empty
+    )
+    no_data_count = max(len(symbols) - loaded_count, 0)
 
     processing_start = time.perf_counter()
     max_workers = max(
@@ -497,6 +643,13 @@ def scan_market(
                 payload = future.result()
             except Exception as e:
                 print(f"   ERROR : {e}")
+                failures.append({
+                    "Index": index,
+                    "Market": market,
+                    "Symbol": symbol,
+                    "Reason": "PROCESS_ERROR",
+                    "Detail": str(e),
+                })
                 continue
 
             payloads.append(payload)
@@ -506,6 +659,14 @@ def scan_market(
 
             if payload["row"] is not None:
                 results.append(payload["row"])
+            elif payload.get("message"):
+                failures.append({
+                    "Index": index,
+                    "Market": market,
+                    "Symbol": symbol,
+                    "Reason": payload.get("message", "NO_ROW"),
+                    "Detail": payload.get("error") or "",
+                })
 
             decision = payload.get("decision")
 
@@ -534,6 +695,22 @@ def scan_market(
         "Index": index,
         "Market": market,
         "Symbols": len(symbols),
+        "SymbolsRequested": len(symbols),
+        "LoadedCount": loaded_count,
+        "RowsProcessed": len(results),
+        "NoDataCount": no_data_count,
+        "FailedCount": len(failures),
+        "CachedCount": cached_count,
+        "DownloadedCount": download_count,
+        "ErrorCount": 0,
+        "ProviderName": provider_name,
+        "Status": "FAILED"
+        if len(symbols) == 0 or loaded_count == 0
+        else "PARTIAL"
+        if failures
+        else "OK",
+        "Error": "",
+        "_FailureRows": failures,
         "Download Time": round(download_time, 2),
         "Indicator Time": round(indicator_total, 2),
         "Decision Time": round(decision_total, 2),
@@ -611,10 +788,10 @@ def save_results(df):
     )
 
     if SAVE_CSV:
-        df.to_csv(csv_path, index=False)
+        atomic_write_csv(df, csv_path, index=False)
 
     if SAVE_EXCEL:
-        df.to_excel(excel_path, index=False)
+        atomic_write_excel(df, excel_path, index=False)
 
     print("\nSaved")
 
@@ -761,6 +938,7 @@ def save_market_quality_summary(
     df,
     market_scan_seconds,
     last_scan_time,
+    scan_run_id=None,
 ):
 
     quality_start = time.perf_counter()
@@ -768,6 +946,7 @@ def save_market_quality_summary(
         df,
         scan_time_seconds=market_scan_seconds,
         last_scan_time=last_scan_time,
+        scan_run_id=scan_run_id,
     )
     output_path = save_market_quality(quality)
 
@@ -834,6 +1013,7 @@ def save_priority_summary(opportunities, market_quality):
             "Default scanner priority after each run."
         ),
     )
+    prioritized = apply_eligibility_policy(prioritized)
     output_path = save_priority_results(prioritized)
 
     print("\n========== PRIORITY RESULTS ==========\n")
@@ -974,6 +1154,8 @@ def account_context_from_portfolio(portfolio, config):
 def save_risk_manager_summary(ai_decisions):
 
     risk_start = time.perf_counter()
+    proposals = pd.DataFrame()
+    summary = pd.DataFrame()
 
     try:
         config = load_risk_config()
@@ -994,6 +1176,17 @@ def save_risk_manager_summary(ai_decisions):
             account=account,
             config=config,
         )
+        if "ScanRunId" in proposals.columns and not summary.empty:
+            scan_run_ids = (
+                proposals["ScanRunId"]
+                .dropna()
+                .astype(str)
+                .replace("", pd.NA)
+                .dropna()
+                .unique()
+                .tolist()
+            )
+            summary["ScanRunId"] = scan_run_ids[0] if scan_run_ids else ""
         summary_path = save_risk_summary(summary)
 
         print("\n========== RISK MANAGER SUMMARY ==========\n")
@@ -1111,7 +1304,7 @@ def save_risk_manager_summary(ai_decisions):
             f"WARNING: Risk Manager failed, scanner output preserved: {exc}"
         )
 
-    return time.perf_counter() - risk_start
+    return time.perf_counter() - risk_start, proposals, summary
 
 
 def show_scan_duration(scan_timings, total_time):
@@ -1221,7 +1414,8 @@ def save_profile_report(profile):
     if profile.empty:
         return
 
-    profile.to_csv(
+    atomic_write_csv(
+        profile,
         PROFILE_FILE,
         index=False,
     )
@@ -1266,35 +1460,98 @@ def main(
     all_results = []
     market_scan_seconds = defaultdict(float)
     scan_timings = []
+    symbol_counts = defaultdict(int)
+    market_errors = defaultdict(str)
+    scan_failures = []
     total_start = time.perf_counter()
     scan_plan = resolve_scan_plan(mode)
     strategy_mode = normalize_strategy_mode(strategy_mode)
+    scan_started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    scan_completed_at = scan_started_at
+    scan_run_id = f"{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
 
     if force_refresh:
         print("\nPRICE CACHE : Force refresh enabled\n")
 
     print(f"\nSCAN MODE   : {mode}")
+    print(f"SCAN RUN ID : {scan_run_id}")
     print(f"MAX WORKERS : {workers}\n")
     print(f"STRATEGY    : {strategy_mode_label(strategy_mode)}\n")
 
     for index, market in scan_plan:
 
-        df, timing = scan_market(
-            index=index,
-            market=market,
-            force_refresh=force_refresh,
-            workers=workers,
-            strategy_mode=strategy_mode,
-        )
+        market_key = str(market).upper()
 
-        market_scan_seconds[market.upper()] += timing["Total Time"]
+        try:
+            df, timing = scan_market(
+                index=index,
+                market=market,
+                force_refresh=force_refresh,
+                workers=workers,
+                strategy_mode=strategy_mode,
+            )
+        except Exception as exc:
+            error_message = str(exc)
+            print(
+                f"\nWARNING: {market_key} scan failed for {index}: "
+                f"{error_message}\n"
+            )
+            df = pd.DataFrame()
+            timing = {
+                "Index": index,
+                "Market": market_key,
+                "Symbols": 0,
+                "SymbolsRequested": 0,
+                "LoadedCount": 0,
+                "RowsProcessed": 0,
+                "NoDataCount": 0,
+                "FailedCount": 0,
+                "CachedCount": 0,
+                "DownloadedCount": 0,
+                "ErrorCount": 1,
+                "ProviderName": "providers.thai.get_symbols"
+                if market_key == "SET"
+                else "providers.usa.get_symbols",
+                "Status": "FAILED",
+                "Error": error_message,
+                "_FailureRows": [
+                    {
+                        "Index": index,
+                        "Market": market_key,
+                        "Symbol": "",
+                        "Reason": "MARKET_SCAN_FAILED",
+                        "Detail": error_message,
+                    }
+                ],
+                "Download Time": 0.0,
+                "Indicator Time": 0.0,
+                "Decision Time": 0.0,
+                "Indicator Cache Hits": 0,
+                "Processing Time": 0.0,
+                "Total Time": 0.0,
+            }
+
+        market_scan_seconds[market_key] += timing["Total Time"]
         scan_timings.append(timing)
+        symbol_counts[market_key] += int(
+            timing.get("SymbolsRequested", timing.get("Symbols", 0)) or 0
+        )
+        if timing.get("Error"):
+            market_errors[market_key] = str(timing.get("Error"))
+        for failure in timing.get("_FailureRows", []):
+            failure = dict(failure)
+            failure["ScanRunId"] = scan_run_id
+            scan_failures.append(failure)
 
         all_results.append(df)
 
-    df = pd.concat(
-        all_results,
-        ignore_index=True
+    df = (
+        pd.concat(
+            all_results,
+            ignore_index=True
+        )
+        if all_results
+        else pd.DataFrame()
     )
 
     before_dedupe = len(df)
@@ -1315,6 +1572,28 @@ def main(
             f"Removed duplicate symbols: {removed}"
         )
 
+    result_rows = (
+        df.groupby("Market").size().to_dict()
+        if "Market" in df.columns and not df.empty
+        else {}
+    )
+    scan_completed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    scan_metadata = build_scan_metadata(
+        requested_mode=mode,
+        scan_timings=scan_timings,
+        result_rows=result_rows,
+        symbol_counts=symbol_counts,
+        errors=market_errors,
+        completed_at=scan_completed_at,
+        scan_run_id=scan_run_id,
+    )
+    save_scan_metadata(scan_metadata)
+    failures_path = save_scan_failures(scan_failures)
+    print(f"Saved Scan Failures: {failures_path}")
+
+    for warning in scan_metadata.get("Warnings", []):
+        print(f"WARNING: {warning}")
+
     if df.empty:
 
         print("No Stocks")
@@ -1326,6 +1605,11 @@ def main(
         strategy_mode=strategy_mode,
     )
     df["ScanMode"] = mode
+    df["RequestedScanMode"] = scan_metadata["RequestedScanMode"]
+    df["ExecutedScanMode"] = scan_metadata["ExecutedScanMode"]
+    df["ScanCompletedAt"] = scan_metadata["ScanCompletedAt"]
+    df["ScanStatus"] = scan_metadata["ScanStatus"]
+    df["ScanRunId"] = scan_metadata["ScanRunId"]
 
     df = df.sort_values(
         by="StrategyScore"
@@ -1337,20 +1621,23 @@ def main(
     quality_time, market_quality = save_market_quality_summary(
         df,
         market_scan_seconds,
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        scan_completed_at,
+        scan_run_id=scan_metadata["ScanRunId"],
     )
 
-    df, opportunity_time = save_opportunity_summary(
+    opportunity_results, opportunity_time = save_opportunity_summary(
         df,
         market_quality,
     )
 
-    df, priority_time = save_priority_summary(
-        df,
+    priority_results, priority_time = save_priority_summary(
+        opportunity_results,
         market_quality,
     )
-    ai_decisions, _ = save_ai_decision_summary(df)
-    save_risk_manager_summary(ai_decisions)
+    ai_decisions, ai_time = save_ai_decision_summary(priority_results)
+    risk_time, risk_proposals, risk_summary = save_risk_manager_summary(ai_decisions)
+
+    df = priority_results
 
     df = df.sort_values(
         by="PriorityScore"
@@ -1366,6 +1653,25 @@ def main(
     export_time = save_results(df)
 
     alert_time = run_watchlist_alerts(df)
+
+    manifest = build_scan_manifest(
+        scan_metadata=scan_metadata,
+        started_at=scan_started_at,
+        completed_at=scan_metadata["ScanCompletedAt"],
+        mode=mode,
+        strategy_mode=strategy_mode,
+        force_refresh=force_refresh,
+        workers=workers,
+        scanner_rows=len(df),
+        opportunity_rows=len(opportunity_results),
+        priority_rows=len(priority_results),
+        ai_rows=len(ai_decisions),
+        proposal_rows=len(risk_proposals),
+    )
+    manifest_path = save_scan_manifest(manifest)
+    manifest["OutputFileTimestamps"] = output_file_timestamps(SCAN_OUTPUT_FILES)
+    save_scan_manifest(manifest)
+    print(f"\nSaved Scan Manifest: {manifest_path}")
 
     show_summary(df)
 

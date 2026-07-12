@@ -9,6 +9,8 @@ import math
 
 import pandas as pd
 
+from runtime_io import atomic_write_csv
+
 
 RISK_MANAGER_VERSION = "1.0"
 RISK_CONFIG_FILE = Path("config") / "risk_config.json"
@@ -569,13 +571,19 @@ def base_result(
     }
 
 
-def no_proposal(row: Mapping[str, Any], action: str, config: RiskConfig, proposal_time: str) -> dict[str, Any]:
+def no_proposal(
+    row: Mapping[str, Any],
+    action: str,
+    config: RiskConfig,
+    proposal_time: str,
+    reason: str = "NONE",
+) -> dict[str, Any]:
     return base_result(
         row=row,
         action=action,
         status="NO_PROPOSAL",
         risk_approved=False,
-        reject_reason="NONE",
+        reject_reason=reason,
         warnings=[],
         entry=select_entry_price(row),
         stop=0,
@@ -919,6 +927,49 @@ def evaluate_risk(
     cfg = normalize_config(config)
     proposal_time = datetime.now().isoformat(timespec="seconds")
     action = safe_text(get_value(row_data, "AIDecision", default="NO_ACTION")).upper()
+    queue_class = safe_text(get_value(row_data, "QueueClass", default="")).upper()
+    eligible_for_buy = str(
+        get_value(row_data, "EligibleForBuyQueue", default="")
+    ).strip().upper() in {"TRUE", "1", "YES", "Y"}
+
+    if queue_class in {"PREPARE", "WATCH"}:
+        return no_proposal(
+            row_data,
+            "NONE",
+            cfg,
+            proposal_time,
+            reason=f"QUEUE_CLASS_{queue_class}",
+        )
+
+    if queue_class == "IGNORE":
+        return no_proposal(
+            row_data,
+            "NONE",
+            cfg,
+            proposal_time,
+            reason="QUEUE_CLASS_IGNORE",
+        )
+
+    if queue_class == "BUY" and action not in {"ADD", "REDUCE", "EXIT"}:
+        action = "BUY"
+
+    if queue_class and queue_class != "BUY" and action in {"BUY", "ADD"}:
+        return no_proposal(
+            row_data,
+            "NONE",
+            cfg,
+            proposal_time,
+            reason="NOT_BUY_QUEUE_ELIGIBLE",
+        )
+
+    if action == "BUY" and queue_class == "BUY" and not eligible_for_buy:
+        return no_proposal(
+            row_data,
+            "NONE",
+            cfg,
+            proposal_time,
+            reason="BUY_QUEUE_FLAG_FALSE",
+        )
 
     if action not in {"BUY", "ADD", "REDUCE", "EXIT", "HOLD", "WATCH", "PREPARE", "AVOID", "NO_ACTION"}:
         account_data = normalize_account(row_data, account, cfg)
@@ -927,7 +978,13 @@ def evaluate_risk(
 
     if action not in ACTIONABLE_DECISIONS:
         proposal_action = "HOLD" if action == "HOLD" else "NONE"
-        return no_proposal(row_data, proposal_action, cfg, proposal_time)
+        return no_proposal(
+            row_data,
+            proposal_action,
+            cfg,
+            proposal_time,
+            reason=f"ACTION_{action}_NOT_ACTIONABLE",
+        )
 
     account_data = normalize_account(row_data, account, cfg)
     portfolio_data = normalize_portfolio_context(row_data, portfolio)
@@ -1101,7 +1158,7 @@ def build_risk_summary(
     commission = safe_float(actionable["EstimatedCommission"].sum())
     slippage = safe_float(actionable["EstimatedSlippage"].sum())
     current_exposure = account_data["total_exposure"]
-    projected_exposure = max(current_exposure + buy_value - sell_value, 0)
+    projected_exposure = max(buy_value - sell_value, 0)
     equity = max(account_data["account_equity"], 1)
     estimated_cash_after = account_data["available_cash"] - safe_float(actionable[actionable["ProposalAction"].isin(["BUY", "ADD"])]["EstimatedTotalCost"].sum())
     estimated_cash_after += sell_value - safe_float(actionable[actionable["ProposalAction"].isin(["REDUCE", "EXIT"])]["EstimatedTotalCost"].sum())
@@ -1127,7 +1184,12 @@ def build_risk_summary(
         "EstimatedCommission": round(commission, 6),
         "EstimatedSlippage": round(slippage, 6),
         "EstimatedCashAfter": round(estimated_cash_after, 6),
-        "MaxSinglePositionPct": round(safe_float(proposals["ProjectedExposurePct"].max()), 4),
+        "MaxSinglePositionPct": round(
+            safe_float(actionable["ProjectedExposurePct"].max())
+            if not actionable.empty
+            else 0,
+            4,
+        ),
         "AverageRiskScore": round(safe_float(pd.to_numeric(proposals["RiskScore"], errors="coerce").mean()), 2),
         "HighRiskProposalCount": int((proposals["RiskLevel"] == "HIGH").sum()),
         "RiskManagerVersion": RISK_MANAGER_VERSION,
@@ -1138,13 +1200,13 @@ def build_risk_summary(
 
 def save_order_proposals(proposals: pd.DataFrame, path: Path = ORDER_PROPOSALS_FILE) -> Path:
     path.parent.mkdir(exist_ok=True)
-    proposals.to_csv(path, index=False)
+    atomic_write_csv(proposals, path, index=False)
 
     return path
 
 
 def save_risk_summary(summary: pd.DataFrame, path: Path = RISK_SUMMARY_FILE) -> Path:
     path.parent.mkdir(exist_ok=True)
-    summary.to_csv(path, index=False)
+    atomic_write_csv(summary, path, index=False)
 
     return path

@@ -7,6 +7,7 @@ import sys
 import pandas as pd
 import streamlit as st
 
+from candidate_eligibility import split_candidate_queues
 from config import MAX_WORKERS
 from data import PRICE_CACHE_DIR
 from market_quality import (
@@ -26,7 +27,9 @@ from priority_engine import (
     load_priority_results,
     recommend_priority_mode,
 )
+from approval_queue import load_approval_queue
 from risk_manager import build_risk_summary
+from scan_metadata import SCAN_METADATA_FILE, load_scan_manifest, load_scan_metadata
 from strategy_lifecycle import (
     get_state_transitions,
     load_lifecycle,
@@ -957,7 +960,23 @@ def apply_filters(
     return sort_results(data)
 
 
-def scanner_debug_info(df, result_path):
+def metadata_text(metadata, key, default="N/A"):
+
+    if not metadata:
+        return default
+
+    value = metadata.get(key, default)
+
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value) if value else default
+
+    if value is None or str(value).strip() == "":
+        return default
+
+    return str(value)
+
+
+def scanner_debug_info(df, result_path, metadata=None):
 
     if result_path is None:
         modified_time = "N/A"
@@ -992,6 +1011,9 @@ def scanner_debug_info(df, result_path):
     return {
         "Loaded file path": loaded_path,
         "File modified time": modified_time,
+        "Scan metadata file": str(SCAN_METADATA_FILE)
+        if SCAN_METADATA_FILE.exists()
+        else "N/A",
         "Loaded rows": int(len(df)),
         "SET rows": int((df["Market"] == "SET").sum())
         if "Market" in df.columns
@@ -1011,7 +1033,28 @@ def scanner_debug_info(df, result_path):
         )
         if "StrategyMode" in df.columns
         else "Standard",
-        "ScanMode": scan_mode,
+        "ScanMode": metadata_text(metadata, "ExecutedScanMode", scan_mode),
+        "RequestedScanMode": metadata_text(metadata, "RequestedScanMode"),
+        "ExecutedScanMode": metadata_text(metadata, "ExecutedScanMode", scan_mode),
+        "ExecutedMarkets": metadata_text(metadata, "ExecutedMarkets"),
+        "SETSymbolsRequested": metadata_text(metadata, "SETSymbolsRequested", "0"),
+        "SETSymbolsProcessed": metadata_text(metadata, "SETSymbolsProcessed", "0"),
+        "USASymbolsRequested": metadata_text(metadata, "USASymbolsRequested", "0"),
+        "USASymbolsProcessed": metadata_text(metadata, "USASymbolsProcessed", "0"),
+        "ScanCompletedAt": metadata_text(metadata, "ScanCompletedAt"),
+        "ScanStatus": metadata_text(metadata, "ScanStatus"),
+        "USAError": metadata_text(metadata, "USAError", ""),
+        "SET diagnostics": metadata_text(
+            metadata.get("MarketDiagnostics", {}) if metadata else {},
+            "SET",
+            "",
+        ),
+        "USA diagnostics": metadata_text(
+            metadata.get("MarketDiagnostics", {}) if metadata else {},
+            "USA",
+            "",
+        ),
+        "Warnings": metadata_text(metadata, "Warnings", ""),
     }
 
 
@@ -1038,6 +1081,81 @@ def dataframe_values(df, column, default="N/A"):
     )
 
 
+def score_diagnostics(df, column):
+
+    if df is None or df.empty or column not in df.columns:
+        return {
+            "source": column,
+            "min": 0,
+            "median": 0,
+            "mean": 0,
+            "p90": 0,
+            "max": 0,
+            "null_count": 0,
+            "zero_count": 0,
+        }
+
+    values = pd.to_numeric(
+        df[column],
+        errors="coerce",
+    )
+    non_null = values.dropna()
+
+    if non_null.empty:
+        return {
+            "source": column,
+            "min": 0,
+            "median": 0,
+            "mean": 0,
+            "p90": 0,
+            "max": 0,
+            "null_count": int(values.isna().sum()),
+            "zero_count": 0,
+        }
+
+    return {
+        "source": column,
+        "min": round(float(non_null.min()), 2),
+        "median": round(float(non_null.median()), 2),
+        "mean": round(float(non_null.mean()), 2),
+        "p90": round(float(non_null.quantile(0.90)), 2),
+        "max": round(float(non_null.max()), 2),
+        "null_count": int(values.isna().sum()),
+        "zero_count": int((non_null == 0).sum()),
+    }
+
+
+def opportunity_score_diagnostics(df):
+
+    score_column = (
+        "OpportunityScore"
+        if df is not None and "OpportunityScore" in df.columns
+        else "PriorityScore"
+        if df is not None and "PriorityScore" in df.columns
+        else "StrategyScore"
+        if df is not None and "StrategyScore" in df.columns
+        else "Score"
+    )
+    diagnostics = score_diagnostics(df, score_column)
+
+    if df is None or df.empty:
+        diagnostics.update({
+            "market_counts": {},
+            "lifecycle_counts": {},
+        })
+        return diagnostics
+
+    diagnostics.update({
+        "market_counts": df["Market"].value_counts().to_dict()
+        if "Market" in df.columns
+        else {},
+        "lifecycle_counts": df["LifecycleState"].value_counts().head(10).to_dict()
+        if "LifecycleState" in df.columns
+        else {},
+    })
+    return diagnostics
+
+
 def opportunity_debug_info(df, result_path, is_fallback=False):
 
     if result_path is None:
@@ -1050,6 +1168,8 @@ def opportunity_debug_info(df, result_path, is_fallback=False):
     else:
         loaded_path = str(result_path)
         modified_time = result_file_display_time(result_path)
+
+    diagnostics = opportunity_score_diagnostics(df)
 
     return {
         "Loaded opportunity file path": loaded_path,
@@ -1071,23 +1191,34 @@ def opportunity_debug_info(df, result_path, is_fallback=False):
             "ScanMode",
             "N/A",
         ),
+        "Score source column": diagnostics["source"],
+        "Score min": diagnostics["min"],
+        "Score median": diagnostics["median"],
+        "Score mean": diagnostics["mean"],
+        "Score p90": diagnostics["p90"],
+        "Score max": diagnostics["max"],
+        "Score null count": diagnostics["null_count"],
+        "Score zero count": diagnostics["zero_count"],
+        "Score count by Market": diagnostics["market_counts"],
+        "Score count by LifecycleState": diagnostics["lifecycle_counts"],
     }
 
 
-def render_scanner_status(df, result_path, last_scan):
+def render_scanner_status(df, result_path, last_scan, metadata=None):
 
     info = scanner_debug_info(
         df,
         result_path,
+        metadata,
     )
     cols = st.columns(4)
     cols[0].metric(
         "Scan Mode",
-        info["ScanMode"],
+        info["ExecutedScanMode"],
     )
     cols[1].metric(
-        "Strategy Mode",
-        current_strategy_mode(df),
+        "Scan Status",
+        info["ScanStatus"],
     )
     cols[2].metric(
         "Rows Loaded",
@@ -1095,15 +1226,22 @@ def render_scanner_status(df, result_path, last_scan):
     )
     cols[3].metric(
         "Last Scan Time",
-        last_scan,
+        info["ScanCompletedAt"]
+        if info["ScanCompletedAt"] != "N/A"
+        else last_scan,
     )
 
+    warnings = metadata.get("Warnings", []) if metadata else []
+    for warning in warnings:
+        st.warning(str(warning))
 
-def render_debug_info(df, result_path):
+
+def render_debug_info(df, result_path, metadata=None):
 
     info = scanner_debug_info(
         df,
         result_path,
+        metadata,
     )
 
     with st.expander("Debug Info"):
@@ -1120,6 +1258,240 @@ def render_debug_info(df, result_path):
             use_container_width=True,
             hide_index=True,
         )
+
+
+def scan_run_ids(dataframe):
+
+    if dataframe is None or dataframe.empty or "ScanRunId" not in dataframe.columns:
+        return set()
+
+    return {
+        str(value).strip()
+        for value in dataframe["ScanRunId"].dropna().tolist()
+        if str(value).strip()
+    }
+
+
+def market_status(metadata, market):
+
+    diagnostics = metadata.get("MarketDiagnostics", {}) if metadata else {}
+    item = diagnostics.get(market, {})
+    return item.get("Status", "N/A")
+
+
+def render_pipeline_health(df, opportunity_df, metadata):
+
+    manifest = load_scan_manifest()
+    priority_df, _, priority_missing = load_priority_results_from_disk()
+    ai_df, _, ai_missing = load_ai_decisions_from_disk()
+    risk_df, _, risk_missing = load_order_proposals_from_disk()
+
+    ranked = (
+        priority_df
+        if not priority_missing and not priority_df.empty
+        else opportunity_df
+    )
+    ai_for_queue = None
+    risk_for_queue = None
+
+    if not ai_missing and not ai_df.empty:
+        ai_for_queue = normalize_ai_decision_frame(ai_df)
+    if not risk_missing and not risk_df.empty:
+        risk_for_queue = normalize_order_proposals_frame(risk_df)
+
+    ranked, buy_queue, watch_queue = split_candidate_queues(
+        ranked,
+        ai_decisions=ai_for_queue,
+        risk_proposals=risk_for_queue,
+    )
+    prepare_count = int((ranked.get("QueueClass", pd.Series(dtype=str)) == "PREPARE").sum())
+    watch_count = int((ranked.get("QueueClass", pd.Series(dtype=str)) == "WATCH").sum())
+
+    pending_approvals = 0
+    try:
+        approval_queue = load_approval_queue()
+        if not approval_queue.empty and "Status" in approval_queue.columns:
+            pending_approvals = int((approval_queue["Status"] == "PENDING_APPROVAL").sum())
+    except Exception:
+        pending_approvals = 0
+
+    risk_proposals = 0
+    if not risk_missing and not risk_df.empty and "ProposalStatus" in risk_df.columns:
+        risk_proposals = int(
+            risk_df["ProposalStatus"].isin(["PENDING_APPROVAL", "APPROVED_FOR_PAPER", "REJECTED"]).sum()
+        )
+
+    st.subheader("Pipeline Health")
+    cols = st.columns(6)
+    cols[0].metric("SET Scan", market_status(metadata, "SET"))
+    cols[1].metric("USA Scan", market_status(metadata, "USA"))
+    cols[2].metric("Scanner Rows", int(len(df)))
+    cols[3].metric("Priority Rows", int(0 if priority_missing else len(priority_df)))
+    cols[4].metric("BUY Queue", int(len(buy_queue)))
+    cols[5].metric("PREPARE", prepare_count)
+
+    cols = st.columns(6)
+    cols[0].metric("Opportunity Rows", int(len(opportunity_df)))
+    cols[1].metric("AI Rows", int(0 if ai_missing else len(ai_df)))
+    cols[2].metric("WATCH", watch_count)
+    cols[3].metric("Risk Proposals", risk_proposals)
+    cols[4].metric("Pending Approvals", pending_approvals)
+    cols[5].metric("ScanRunId", metadata.get("ScanRunId", "N/A") if metadata else "N/A")
+
+    if manifest:
+        completed_markets = manifest.get("CompletedMarkets", [])
+        st.caption(
+            "Completed Markets: "
+            + (", ".join(completed_markets) if completed_markets else "None")
+            + f" | Manifest Status: {manifest.get('Status', 'N/A')}"
+        )
+
+    expected_scan_run = metadata.get("ScanRunId") if metadata else ""
+    output_ids = {
+        "scanner": scan_run_ids(df),
+        "opportunity": scan_run_ids(opportunity_df),
+        "priority": scan_run_ids(priority_df),
+        "ai": scan_run_ids(ai_df),
+        "risk": scan_run_ids(risk_df),
+    }
+    mismatched = [
+        name
+        for name, values in output_ids.items()
+        if expected_scan_run and values and values != {expected_scan_run}
+    ]
+    if mismatched:
+        st.warning(
+            "ScanRunId mismatch detected in: "
+            + ", ".join(mismatched)
+            + ". Outputs may be from different scanner runs."
+        )
+
+    requested = set(metadata.get("ExpectedMarkets", [])) if metadata else set()
+    if "USA" in requested and market_status(metadata, "USA") in {"FAILED", "N/A"}:
+        st.warning(
+            "USA scan requested but no USA results were produced. "
+            "Check provider, symbol universe, download errors, or cache."
+        )
+
+    if len(df) > 0:
+        for name, frame, missing in [
+            ("Opportunity", opportunity_df, False),
+            ("Priority", priority_df, priority_missing),
+            ("AI decision", ai_df, ai_missing),
+        ]:
+            if missing or frame.empty:
+                st.warning(f"{name} output is missing or empty while scanner rows exist.")
+
+    render_funnel_summary(
+        ranked,
+        buy_queue,
+        watch_queue,
+        ai_df if not ai_missing else pd.DataFrame(),
+        risk_df if not risk_missing else pd.DataFrame(),
+        pending_approvals,
+    )
+
+
+def reason_counts(series):
+
+    counts = {}
+
+    for value in series.fillna("").astype(str):
+        for reason in value.split("|"):
+            reason = reason.strip()
+            if not reason:
+                continue
+            counts[reason] = counts.get(reason, 0) + 1
+
+    return counts
+
+
+def render_funnel_summary(ranked, buy_queue, watch_queue, ai_df, risk_df, pending_approvals):
+
+    if ranked is None or ranked.empty:
+        return
+
+    lifecycle_eligible = int(ranked.get("BaseEligible", pd.Series(False, index=ranked.index)).fillna(False).astype(bool).sum())
+    opportunity_score = pd.to_numeric(
+        ranked.get("OpportunityScore", pd.Series(0, index=ranked.index)),
+        errors="coerce",
+    ).fillna(0)
+    priority_score = pd.to_numeric(
+        ranked.get("PriorityScore", pd.Series(0, index=ranked.index)),
+        errors="coerce",
+    ).fillna(0)
+    rr = pd.to_numeric(
+        ranked.get("RiskRewardRatio", ranked.get("RR", pd.Series(0, index=ranked.index))),
+        errors="coerce",
+    ).fillna(0)
+    entry = pd.to_numeric(
+        ranked.get("EntryPrice", ranked.get("Price", pd.Series(0, index=ranked.index))),
+        errors="coerce",
+    ).fillna(0)
+    stop = pd.to_numeric(
+        ranked.get("StopPrice", ranked.get("StopLoss", pd.Series(0, index=ranked.index))),
+        errors="coerce",
+    ).fillna(0)
+    target = pd.to_numeric(
+        ranked.get("TargetPrice", ranked.get("Target", pd.Series(0, index=ranked.index))),
+        errors="coerce",
+    ).fillna(0)
+
+    ai_actionable = 0
+    if ai_df is not None and not ai_df.empty and "AIDecision" in ai_df.columns:
+        ai_actionable = int(ai_df["AIDecision"].isin(["BUY", "PREPARE", "WATCH"]).sum())
+
+    risk_passed = 0
+    if risk_df is not None and not risk_df.empty and "ProposalStatus" in risk_df.columns:
+        risk_passed = int(risk_df["ProposalStatus"].isin(["PENDING_APPROVAL", "APPROVED_FOR_PAPER"]).sum())
+
+    funnel = pd.DataFrame(
+        [
+            {"Stage": "Scanner candidates", "Input": len(ranked), "Passed": len(ranked), "Rejected": 0},
+            {"Stage": "Lifecycle/Base eligible", "Input": len(ranked), "Passed": lifecycle_eligible, "Rejected": len(ranked) - lifecycle_eligible},
+            {"Stage": "Opportunity score > 0", "Input": len(ranked), "Passed": int((opportunity_score > 0).sum()), "Rejected": int((opportunity_score <= 0).sum())},
+            {"Stage": "Priority score >= 55", "Input": len(ranked), "Passed": int((priority_score >= 55).sum()), "Rejected": int((priority_score < 55).sum())},
+            {"Stage": "AI BUY/PREPARE/WATCH", "Input": len(ai_df) if ai_df is not None else 0, "Passed": ai_actionable, "Rejected": max((len(ai_df) if ai_df is not None else 0) - ai_actionable, 0)},
+            {"Stage": "RR >= 1.5", "Input": len(ranked), "Passed": int((rr >= 1.5).sum()), "Rejected": int((rr < 1.5).sum())},
+            {"Stage": "Price/Stop/Target valid", "Input": len(ranked), "Passed": int(((entry > 0) & (stop > 0) & (target > entry)).sum()), "Rejected": int(((entry <= 0) | (stop <= 0) | (target <= entry)).sum())},
+            {"Stage": "Risk passed", "Input": len(risk_df) if risk_df is not None else 0, "Passed": risk_passed, "Rejected": max((len(risk_df) if risk_df is not None else 0) - risk_passed, 0)},
+            {"Stage": "Buy Queue", "Input": len(ranked), "Passed": len(buy_queue), "Rejected": len(ranked) - len(buy_queue)},
+            {"Stage": "Pending Approval", "Input": len(risk_df) if risk_df is not None else 0, "Passed": pending_approvals, "Rejected": max((len(risk_df) if risk_df is not None else 0) - pending_approvals, 0)},
+        ]
+    )
+
+    with st.expander("Funnel Summary", expanded=False):
+        st.dataframe(
+            funnel,
+            use_container_width=True,
+            hide_index=True,
+        )
+        reasons = reason_counts(
+            ranked.get("BlockingReasons", pd.Series("", index=ranked.index))
+        )
+        if reasons:
+            reason_df = pd.DataFrame(
+                [
+                    {"Reason": reason, "Count": count}
+                    for reason, count in sorted(
+                        reasons.items(),
+                        key=lambda item: item[1],
+                        reverse=True,
+                    )[:10]
+                ]
+            )
+            st.caption("Top rejection reasons")
+            st.dataframe(reason_df, use_container_width=True, hide_index=True)
+
+        if buy_queue.empty:
+            st.info("Buy Queue is empty because no candidate passed every actionable gate.")
+        if watch_queue.empty and ai_df is not None and not ai_df.empty:
+            watch_ai = int(ai_df.get("AIDecision", pd.Series(dtype=str)).isin(["WATCH"]).sum())
+            if watch_ai:
+                st.info(
+                    f"AI produced {watch_ai} WATCH rows, but central eligibility did not admit them into Watch Queue. "
+                    "Check BlockingReasons and WarningReasons above."
+                )
 
 
 def render_opportunity_debug(df, result_path, is_fallback=False):
@@ -1425,6 +1797,8 @@ def render_market_quality_cards(df, last_scan):
         last_scan,
     )
 
+    scan_metadata = load_scan_metadata()
+
     st.subheader("Today's Market")
     render_market_quality_style()
 
@@ -1455,8 +1829,20 @@ def render_market_quality_cards(df, last_scan):
                     0,
                 )
             )
-            tone, recommendation = market_quality_recommendation(score)
-            color = market_quality_color(score)
+            status = market_status(scan_metadata, market)
+            total_stocks = safe_number(data.get("TotalStocks", 0))
+
+            if status == "NOT_REQUESTED":
+                tone = "Not Requested"
+                recommendation = "This market was not part of the latest completed scan."
+                color = "#94a3b8"
+            elif status in {"FAILED", "N/A"} and total_stocks == 0:
+                tone = "No Data"
+                recommendation = "Scan requested but no market data was produced. Check provider, download, or cache."
+                color = "#f87171"
+            else:
+                tone, recommendation = market_quality_recommendation(score)
+                color = market_quality_color(score)
 
             st.markdown(
                 f"""
@@ -1464,6 +1850,7 @@ def render_market_quality_cards(df, last_scan):
                     <div class="ra-market-name">{market}</div>
                     <div class="ra-market-tone"><span class="ra-market-dot">●</span>{html.escape(tone)}</div>
                     <div class="ra-market-note">{html.escape(recommendation)}</div>
+                    <div class="ra-market-meta">Status {html.escape(str(status))}</div>
                     <div class="ra-market-meta">Quality {score:.1f} · {html.escape(str(label))} · Trend {html.escape(str(trend))}</div>
                 </div>
                 """,
@@ -3340,6 +3727,7 @@ def render_top_seed_sections(opportunities):
 def render_opportunity_summary_cards(opportunities):
 
     st.subheader("Opportunity Summary")
+    diagnostics = opportunity_score_diagnostics(opportunities)
 
     top = (
         opportunities.sort_values(
@@ -3364,9 +3752,22 @@ def render_opportunity_summary_cards(opportunities):
         if top is not None
         else "N/A"
     )
+    top_action = str(top.get("RecommendedAction", "")).upper() if top is not None else ""
+    top_lifecycle = str(top.get("LifecycleState", "")).upper() if top is not None else ""
+    top_is_actionable = (
+        top is not None
+        and "IGNORE" not in top_action
+        and "AVOID" not in top_action
+        and top_lifecycle not in {"SKIP", "EXTENDED"}
+    )
+    top_metric_label = (
+        "Top Opportunity"
+        if top_is_actionable
+        else "Top Broad-Ranked Candidate"
+    )
     cols = st.columns(5)
     cols[0].metric(
-        "Top Opportunity",
+        top_metric_label,
         top_label,
     )
     cols[1].metric(
@@ -3402,14 +3803,20 @@ def render_opportunity_summary_cards(opportunities):
         ),
     )
 
-    cols = st.columns(3)
+    cols = st.columns(5)
     cols[0].metric(
         "Avg Opportunity Score",
-        f"{safe_number(opportunities['OpportunityScore'].mean()):.2f}"
-        if not opportunities.empty
-        else "0.00",
+        f"{diagnostics['mean']:.2f}",
     )
     cols[1].metric(
+        "Median Opportunity Score",
+        f"{diagnostics['median']:.2f}",
+    )
+    cols[2].metric(
+        "Zero Scores",
+        int(diagnostics["zero_count"]),
+    )
+    cols[3].metric(
         "SET Opportunities",
         int(
             (
@@ -3417,7 +3824,7 @@ def render_opportunity_summary_cards(opportunities):
             ).sum()
         ),
     )
-    cols[2].metric(
+    cols[4].metric(
         "USA Opportunities",
         int(
             (
@@ -3705,6 +4112,309 @@ def render_buy_queue(opportunities):
     with st.expander("Detailed Buy Queue", expanded=False):
         st.dataframe(
             queue[columns],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+
+def sort_ranked_candidates(data):
+
+    if data.empty:
+        return data
+
+    ranked = data.copy()
+    rank_column = (
+        "PriorityRank"
+        if "PriorityRank" in ranked.columns
+        else "OpportunityRank"
+    )
+    score_column = (
+        "PriorityScore"
+        if "PriorityScore" in ranked.columns
+        else "OpportunityScore"
+    )
+
+    if rank_column not in ranked.columns:
+        ranked[rank_column] = range(1, len(ranked) + 1)
+    if score_column not in ranked.columns:
+        ranked[score_column] = 0
+
+    ranked[rank_column] = pd.to_numeric(
+        ranked[rank_column],
+        errors="coerce",
+    ).fillna(999999)
+    ranked[score_column] = pd.to_numeric(
+        ranked[score_column],
+        errors="coerce",
+    ).fillna(0)
+    return ranked.sort_values(
+        [
+            rank_column,
+            score_column,
+        ],
+        ascending=[
+            True,
+            False,
+        ],
+    )
+
+
+def render_top_ranked_candidates(candidates):
+
+    st.subheader("Broad Ranking")
+    st.caption(
+        "Non-actionable diagnostic ranking. Use Buy Queue or Watch Queue for decisions."
+    )
+
+    ranked = sort_ranked_candidates(candidates).head(10).copy()
+
+    if ranked.empty:
+        st.info("No ranked candidates found.")
+        return
+
+    ranked["Reason Summary"] = ranked.apply(
+        opportunity_reason_summary,
+        axis=1,
+    )
+    columns = [
+        "PriorityRank"
+        if "PriorityRank" in ranked.columns
+        else "OpportunityRank",
+        "Symbol",
+        "Market",
+        "LifecycleState",
+        "RecommendedAction",
+        "QueueClass",
+        "AIDecision",
+        "AIConfidence",
+        "RR",
+        "PriorityScore"
+        if "PriorityScore" in ranked.columns
+        else "OpportunityScore",
+        "BlockingReasons",
+        "WarningReasons",
+    ]
+    columns = [
+        column
+        for column in columns
+        if column in ranked.columns
+    ]
+
+    st.dataframe(
+        ranked[columns],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+def render_queue_card_styles():
+
+    st.markdown(
+        """
+        <style>
+        .ra-queue-card {
+            border: 1px solid rgba(148, 163, 184, 0.20);
+            border-radius: 8px;
+            padding: 9px 11px;
+            margin-bottom: 8px;
+            background: rgba(15, 23, 42, 0.22);
+        }
+        .ra-queue-title {
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+            align-items: center;
+        }
+        .ra-queue-symbol {
+            font-weight: 780;
+            font-size: 0.95rem;
+        }
+        .ra-queue-badge {
+            border: 1px solid rgba(96, 165, 250, 0.30);
+            border-radius: 999px;
+            padding: 2px 8px;
+            color: #93c5fd;
+            font-size: 0.68rem;
+            font-weight: 800;
+            letter-spacing: 0.03em;
+        }
+        .ra-queue-meta {
+            font-size: 0.78rem;
+            opacity: 0.82;
+            margin-top: 4px;
+        }
+        .ra-queue-reason {
+            font-size: 0.75rem;
+            opacity: 0.70;
+            margin-top: 5px;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_queue_cards(queue, empty_message):
+
+    if queue.empty:
+        st.info(empty_message)
+        return
+
+    queue = sort_ranked_candidates(queue).head(5).copy()
+    queue["Reason Summary"] = queue.apply(
+        opportunity_reason_summary,
+        axis=1,
+    )
+    render_queue_card_styles()
+
+    for display_rank, (_, row) in enumerate(
+        queue.iterrows(),
+        start=1,
+    ):
+        symbol = html.escape(str(row.get("Symbol", "")))
+        badge = html.escape(priority_badge(row, display_rank))
+        seed_score = safe_number(row.get("SeedScore", 0))
+        priority_score = safe_number(row.get("PriorityScore", 0))
+        rr = safe_number(row.get("RR", 0))
+        fresh = safe_number(row.get("FreshnessScore", 0))
+        expansion = safe_number(row.get("ExpansionScore", 0))
+        pattern = str(row.get("PatternName", "")).strip()
+        setup = str(row.get("StrategySetup", "")).strip()
+        dry_days = int(safe_number(row.get("DryVolumeDays", 0)))
+        reason_parts = [
+            part
+            for part in [
+                setup,
+                pattern,
+                f"Dry volume {dry_days}d" if dry_days else "",
+            ]
+            if part
+        ]
+        reason = html.escape(
+            " · ".join(reason_parts)
+            or str(row.get("Reason Summary", ""))
+        )
+
+        st.markdown(
+            f"""
+            <div class="ra-queue-card">
+                <div class="ra-queue-title">
+                    <span class="ra-queue-symbol">#{display_rank} {symbol}</span>
+                    <span class="ra-queue-badge">{badge}</span>
+                </div>
+                <div class="ra-queue-meta">Seed {seed_score:.0f} &middot; Priority {priority_score:.1f}</div>
+                <div class="ra-queue-meta">RR {rr:.1f} &middot; Fresh {fresh:.0f} &middot; Exp {expansion:.0f}</div>
+                <div class="ra-queue-reason"><strong>Reason:</strong> {reason}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+def render_candidate_queues(
+    opportunities,
+    ai_decisions=None,
+    risk_proposals=None,
+):
+
+    ranked, buy_queue, watch_queue = split_candidate_queues(
+        opportunities,
+        ai_decisions=ai_decisions,
+        risk_proposals=risk_proposals,
+    )
+
+    render_top_ranked_candidates(ranked)
+
+    st.subheader("Buy Queue")
+    st.caption("Only actionable candidates that pass AI, RR, price, and risk gates.")
+    render_queue_cards(
+        buy_queue,
+        "No actionable Buy Queue candidates today.",
+    )
+
+    buy_columns = [
+        "PriorityRank"
+        if "PriorityRank" in buy_queue.columns
+        else "OpportunityRank",
+        "Symbol",
+        "Market",
+        "PriorityScore"
+        if "PriorityScore" in buy_queue.columns
+        else "OpportunityScore",
+        "PriorityAction"
+        if "PriorityAction" in buy_queue.columns
+        else "RecommendedAction",
+        "RecommendedAction",
+        "AIDecision",
+        "AIConfidence",
+        "RR",
+        "EntryPrice",
+        "StopPrice",
+        "TargetPrice",
+        "EligibilityReasons",
+    ]
+    buy_columns = [
+        column
+        for column in buy_columns
+        if column in buy_queue.columns
+    ]
+
+    with st.expander("Detailed Buy Queue", expanded=False):
+        if buy_queue.empty:
+            st.info("No actionable Buy Queue candidates.")
+        else:
+            st.dataframe(
+                buy_queue[buy_columns],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    render_watch_queue(watch_queue)
+
+
+def render_watch_queue(watch_queue):
+
+    st.subheader("Watch Queue")
+    st.caption("Candidates worth monitoring, but not eligible for Buy Queue yet.")
+
+    if watch_queue.empty:
+        st.info("No watch queue candidates today.")
+        return
+
+    watch = sort_ranked_candidates(watch_queue).head(10).copy()
+    watch["Reason Summary"] = watch.apply(
+        opportunity_reason_summary,
+        axis=1,
+    )
+    columns = [
+        "PriorityRank"
+        if "PriorityRank" in watch.columns
+        else "OpportunityRank",
+        "Symbol",
+        "Market",
+        "LifecycleState",
+        "RecommendedAction",
+        "AIDecision",
+        "AIConfidence",
+        "RR",
+        "EligibilityReasons",
+        "Reason Summary",
+    ]
+    columns = [
+        column
+        for column in columns
+        if column in watch.columns
+    ]
+
+    st.dataframe(
+        watch[columns],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    with st.expander("Detailed Watch Queue", expanded=False):
+        st.dataframe(
+            watch[columns],
             use_container_width=True,
             hide_index=True,
         )
@@ -4236,12 +4946,16 @@ def render_risk_manager_center():
         f"{safe_number(summary_row.get('TotalProposedSellValue', 0)):,.0f}",
     )
     c5.metric(
-        "Projected Exposure",
+        "Proposed Add'l Exposure",
         f"{safe_number(summary_row.get('ProjectedExposurePct', 0)):.2f}%",
     )
     c6.metric(
-        "Cash After",
-        f"{safe_number(summary_row.get('EstimatedCashAfter', 0)):,.0f}",
+        "Current Exposure",
+        f"{safe_number(summary_row.get('CurrentExposurePct', 0)):.2f}%",
+    )
+    st.caption(
+        "Cash after valid proposals: "
+        f"{safe_number(summary_row.get('EstimatedCashAfter', 0)):,.0f}"
     )
 
     with st.expander("Risk Manager Filters", expanded=False):
@@ -4681,6 +5395,18 @@ def render_todays_opportunities(
         if not priority_missing and not priority_results.empty
         else opportunities.copy()
     )
+    ai_decisions, _, ai_missing = load_ai_decisions_from_disk()
+    if ai_missing or ai_decisions.empty:
+        ai_decisions = None
+    else:
+        ai_decisions = normalize_ai_decision_frame(ai_decisions)
+
+    risk_proposals, _, risk_missing = load_order_proposals_from_disk()
+    if risk_missing or risk_proposals.empty:
+        risk_proposals = None
+    else:
+        risk_proposals = normalize_order_proposals_frame(risk_proposals)
+
     render_ai_pick_today(
         seed_opportunities,
         quality,
@@ -4690,7 +5416,11 @@ def render_todays_opportunities(
         seed_opportunities,
     )
     render_top_seed_sections(seed_opportunities)
-    render_buy_queue(seed_opportunities)
+    render_candidate_queues(
+        seed_opportunities,
+        ai_decisions=ai_decisions,
+        risk_proposals=risk_proposals,
+    )
     render_ai_decision_center()
     render_risk_manager_center()
     render_opportunity_export()
@@ -5136,8 +5866,9 @@ def scanner_page():
     opportunity_df, opportunity_path, opportunity_fallback = (
         load_opportunity_results_from_disk(df)
     )
+    scan_metadata = load_scan_metadata()
 
-    last_scan = result_file_display_time(result_path)
+    last_scan = scan_metadata.get("ScanCompletedAt") or result_file_display_time(result_path)
 
     st.caption(f"Last Scan: {last_scan}")
     st.caption(f"Strategy Mode: {current_strategy_mode(df)}")
@@ -5150,10 +5881,17 @@ def scanner_page():
         df,
         result_path,
         last_scan,
+        scan_metadata,
     )
     render_debug_info(
         df,
         result_path,
+        scan_metadata,
+    )
+    render_pipeline_health(
+        df,
+        opportunity_df,
+        scan_metadata,
     )
 
     render_market_quality_cards(df, last_scan)
