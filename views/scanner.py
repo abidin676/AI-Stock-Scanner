@@ -2288,6 +2288,381 @@ def render_reason_block(title, reasons):
     )
 
 
+BUY_CHECKLIST_LABELS = {
+    "ema9_above_ema20": "EMA9 > EMA20",
+    "ema20_rising": "EMA20 กำลังขึ้น",
+    "ema50_above_ema200": "EMA50 > EMA200",
+    "rsi_zone": "RSI อยู่ในโซน",
+    "rvol_ready": "RVOL >= 1.5x",
+    "breakout_ready": "Breakout / Pivot ยืนยัน",
+    "volume_normal": "Volume ไม่ผิดปกติ",
+    "risk_passed": "Risk ผ่าน",
+}
+
+
+def row_value(row, *names, default=None):
+
+    for name in names:
+        if not hasattr(row, "get"):
+            continue
+
+        try:
+            if name not in row:
+                continue
+        except TypeError:
+            pass
+
+        value = row.get(name, default)
+
+        try:
+            if pd.isna(value):
+                continue
+        except (TypeError, ValueError):
+            pass
+
+        if value is not None:
+            return value
+
+    return default
+
+
+def row_text(row, *names):
+
+    value = row_value(row, *names, default="")
+    return str(value or "").strip()
+
+
+def row_bool(row, *names):
+
+    value = row_value(row, *names, default=False)
+
+    if isinstance(value, bool):
+        return value
+
+    if isinstance(value, (int, float)):
+        return value != 0
+
+    return str(value or "").strip().upper() in {
+        "TRUE",
+        "YES",
+        "Y",
+        "1",
+    }
+
+
+def combined_decision_text(row):
+
+    fields = [
+        "AIReason",
+        "AIPositiveFactors",
+        "AINegativeFactors",
+        "AIBlockers",
+        "AISuggestedAction",
+        "OpportunityReasons",
+        "PriorityReasons",
+        "SeedReasons",
+        "BottomingReasons",
+        "ExpansionReasons",
+        "StrategySignal",
+        "StrategySetup",
+        "Signal",
+        "Setup",
+        "RecommendedAction",
+        "PriorityAction",
+        "ChartReaderSummary",
+    ]
+
+    return " ".join(
+        row_text(row, field)
+        for field in fields
+        if row_text(row, field)
+    ).upper()
+
+
+def has_any_text(text, terms):
+
+    return any(
+        term.upper() in text
+        for term in terms
+    )
+
+
+def build_buy_checklist(row):
+
+    text = combined_decision_text(row)
+
+    ema9 = row_value(row, "EMA9", "ema9")
+    ema20 = row_value(row, "EMA20", "ema20")
+    ema50 = row_value(row, "EMA50", "ema50")
+    ema200 = row_value(row, "EMA200", "ema200")
+    rsi = row_value(row, "RSI")
+    rvol = row_value(row, "RVOL")
+    expansion = row_value(row, "ExpansionScore")
+    rr = row_value(row, "RR", "RiskRewardRatio")
+    risk_pct = row_value(row, "RiskPct", "StopDistancePct")
+
+    ema9_above_ema20 = (
+        safe_number(ema9) > safe_number(ema20)
+        if ema9 is not None and ema20 is not None
+        else has_any_text(
+            text,
+            {
+                "EMA9 > EMA20",
+                "EMA9 ABOVE EMA20",
+                "EMA9 NEAR/ABOVE EMA20",
+                "EMA9 CROSSED ABOVE EMA20",
+            },
+        )
+    )
+
+    ema20_rising = (
+        row_bool(row, "EMA20Improving")
+        or safe_number(row_value(row, "DaysSinceEMA20SlopeTurnPositive")) > 0
+        or has_any_text(
+            text,
+            {
+                "EMA20 RISING",
+                "EMA20 IMPROVING",
+                "EMA20 TURNING UP",
+                "EMA20 SLOPE TURNED POSITIVE",
+            },
+        )
+    )
+
+    ema50_above_ema200 = (
+        safe_number(ema50) > safe_number(ema200)
+        if ema50 is not None and ema200 is not None
+        else has_any_text(
+            text,
+            {
+                "EMA50 > EMA200",
+                "EMA50 ABOVE EMA200",
+            },
+        )
+    )
+
+    rsi_zone = (
+        45 <= safe_number(rsi) <= 65
+        if rsi is not None
+        else has_any_text(
+            text,
+            {
+                "HEALTHY RSI",
+                "RSI ACCUMULATION",
+                "RSI อยู่ในโซน",
+            },
+        )
+    )
+
+    rvol_ready = (
+        safe_number(rvol) >= 1.5
+        if rvol is not None
+        else has_any_text(
+            text,
+            {
+                "HIGH RVOL",
+                "RVOL IS EXPANDING",
+                "VOLUME EXPANSION",
+            },
+        )
+    )
+
+    breakout_ready = (
+        row_bool(row, "PocketPivot")
+        or has_any_text(
+            text,
+            {
+                "BREAKOUT",
+                "POCKET PIVOT",
+                "PIVOT POINT",
+                "FIRST IGNITION",
+            },
+        )
+    ) and not has_any_text(
+        text,
+        {
+            "WAIT FOR BREAKOUT",
+            "NEED BREAKOUT",
+            "NO BREAKOUT",
+            "NOT BREAKOUT",
+            "ยังไม่ BREAKOUT",
+        },
+    )
+
+    volume_normal = False
+    if expansion is not None:
+        volume_normal = safe_number(expansion) <= 60
+    elif rvol is not None or text:
+        volume_normal = not has_any_text(
+            text,
+            {
+                "VOLUME SPIKE AWAY",
+                "EXPANSION RISK",
+                "ABNORMAL VOLUME",
+            },
+        )
+    if rvol is not None and safe_number(rvol) > 4:
+        volume_normal = False
+
+    if "RiskApproved" in row:
+        risk_passed = row_bool(row, "RiskApproved")
+    elif has_any_text(
+        text,
+        {
+            "HIGH_RISK",
+            "LOW_RR",
+            "INVALID_STOP",
+            "RISK ยังไม่ผ่าน",
+        },
+    ):
+        risk_passed = False
+    elif row_text(row, "AIRiskLevel").upper() == "HIGH":
+        risk_passed = False
+    elif rr is not None and risk_pct is not None:
+        risk_passed = safe_number(rr) >= 1.5 and safe_number(risk_pct) <= 8
+    else:
+        risk_passed = False
+
+    values = {
+        "ema9_above_ema20": bool(ema9_above_ema20),
+        "ema20_rising": bool(ema20_rising),
+        "ema50_above_ema200": bool(ema50_above_ema200),
+        "rsi_zone": bool(rsi_zone),
+        "rvol_ready": bool(rvol_ready),
+        "breakout_ready": bool(breakout_ready),
+        "volume_normal": bool(volume_normal),
+        "risk_passed": bool(risk_passed),
+    }
+
+    return [
+        {
+            "key": key,
+            "label": label,
+            "passed": values[key],
+        }
+        for key, label in BUY_CHECKLIST_LABELS.items()
+    ]
+
+
+def buy_checklist_summary(items):
+
+    total = len(items)
+    passed = sum(
+        1
+        for item in items
+        if item.get("passed")
+    )
+
+    return f"ผ่านแล้ว {passed}/{total} เงื่อนไข"
+
+
+def next_action_priority(row):
+
+    actions = [
+        ai_action_key(row_text(row, field))
+        for field in [
+            "AIDecision",
+            "RecommendedAction",
+            "PriorityAction",
+            "StrategySignal",
+            "Signal",
+        ]
+        if row_text(row, field)
+    ]
+    text = combined_decision_text(row)
+
+    def has_action(values):
+        return any(
+            action in values
+            for action in actions
+        )
+
+    if has_action(
+        {
+            "EXIT",
+            "REDUCE",
+        }
+    ) or has_any_text(
+        text,
+        {
+            "BELOW_STOP",
+            "SETUP_INVALIDATED",
+            "EXIT",
+        },
+    ):
+        return "EXIT"
+
+    if has_action(
+        {
+            "BUY",
+            "ADD",
+            "STRONG BUY",
+            "SEED BUY",
+        }
+    ):
+        return "BUY"
+
+    if has_action(
+        {
+            "PREPARE",
+            "WATCH CLOSELY",
+            "EARLY WATCH",
+            "SEED WATCH",
+        }
+    ):
+        return "PREPARE"
+
+    return "WATCH"
+
+
+def next_action_message(row, checklist=None):
+
+    checklist = checklist or build_buy_checklist(row)
+    priority = next_action_priority(row)
+    by_key = {
+        item["key"]: bool(item["passed"])
+        for item in checklist
+    }
+
+    if priority == "EXIT":
+        if "BELOW_STOP" in combined_decision_text(row):
+            return "แนวโน้มเสียแล้ว"
+        return "ควรขาย"
+
+    if priority == "BUY" and all(by_key.values()):
+        return "พร้อมเข้าซื้อ"
+
+    if not by_key.get("ema9_above_ema20", False):
+        return "รอ EMA9 ตัด EMA20"
+
+    if not by_key.get("rvol_ready", False):
+        return "รอ Volume มากกว่า 1.5x"
+
+    if not by_key.get("breakout_ready", False):
+        return "รอ Breakout เหนือ High ล่าสุด"
+
+    if not by_key.get("risk_passed", False):
+        return "Risk ยังไม่ผ่าน"
+
+    if priority == "BUY":
+        return "พร้อมเข้าซื้อ"
+
+    if priority == "PREPARE":
+        return "เตรียมซื้อเมื่อสัญญาณยืนยัน"
+
+    return "เฝ้าดูต่อ"
+
+
+def next_action_card(row, checklist=None):
+
+    checklist = checklist or build_buy_checklist(row)
+    priority = next_action_priority(row)
+    return {
+        "Priority": priority,
+        "Message": next_action_message(row, checklist),
+    }
+
+
 def text_meter(label, value, maximum=100, inverse=False):
 
     value = safe_number(value)
@@ -2404,12 +2779,70 @@ def render_visual_meters(row):
     )
 
 
+def render_buy_checklist(row):
+
+    checklist = build_buy_checklist(row)
+    passed = [
+        item
+        for item in checklist
+        if item.get("passed")
+    ]
+    failed = [
+        item
+        for item in checklist
+        if not item.get("passed")
+    ]
+    priority = next_action_priority(row)
+    title = "🟡 ทำไมยังไม่ซื้อ?"
+
+    if priority == "BUY":
+        title = "🟢 เช็กลิสต์ก่อนซื้อ"
+    elif priority == "EXIT":
+        title = "🔴 เหตุผลที่ต้องระวัง"
+
+    st.markdown(f"**{title}**")
+
+    if failed:
+        for item in failed:
+            st.error(f"❌ {item['label']}")
+
+    if passed:
+        with st.expander("เงื่อนไขที่ผ่านแล้ว", expanded=False):
+            for item in passed:
+                st.success(f"✅ {item['label']}")
+
+    st.caption(buy_checklist_summary(checklist))
+    return checklist
+
+
+def render_next_action(row, checklist=None):
+
+    action = next_action_card(
+        row,
+        checklist,
+    )
+    priority = action["Priority"]
+    message = action["Message"]
+    body = f"**{priority}**\n\n{message}"
+
+    st.markdown("**Next Action**")
+
+    if priority == "BUY":
+        st.success(body)
+    elif priority == "PREPARE":
+        st.warning(body)
+    elif priority == "EXIT":
+        st.error(body)
+    else:
+        st.info(body)
+
+
 def render_opinion_and_next_step(row):
 
     st.markdown("**AI Opinion**")
     st.info(ai_opinion_from_metrics(row))
-    st.markdown("**Expected Next Step**")
-    st.success(expected_next_step(row))
+    checklist = render_buy_checklist(row)
+    render_next_action(row, checklist)
 
 
 def render_opportunity_details_legacy(row, market_quality_score):
@@ -3303,32 +3736,6 @@ def ai_opinion_from_metrics(row):
         return "This setup is early, but still needs confirmation before expansion."
 
     return "This setup needs more evidence before it becomes a priority."
-
-
-def expected_next_step(row):
-
-    lifecycle = str(row.get("LifecycleState", "")).upper()
-    expansion = safe_number(row.get("ExpansionScore", 0))
-    seed = safe_number(row.get("SeedScore", 0))
-    fresh = safe_number(row.get("FreshnessScore", 0))
-    rvol = safe_number(row.get("RVOL", 0))
-
-    if lifecycle in {
-        "EXTENDED",
-        "MOMENTUM",
-    } or expansion >= 70:
-        return "Wait for next base"
-
-    if seed >= 78 and fresh >= 70 and expansion <= 25 and rvol >= 1:
-        return "Watch for breakout"
-
-    if seed >= 72 and expansion <= 25 and rvol < 1:
-        return "Needs more volume"
-
-    if seed >= 72 and expansion <= 35:
-        return "Continue Accumulating"
-
-    return "Needs more confirmation"
 
 
 def meter_blocks(value, maximum=100, inverse=False):
@@ -4600,26 +5007,63 @@ def ai_empty_state_message(counts):
     return message
 
 
-def shorten_ai_reason(reason, action=""):
+def summarize_reason(row):
 
-    text = str(reason or "").strip()
-    action_key = ai_action_key(action)
+    if hasattr(row, "get"):
+        text = " ".join(
+            row_text(
+                row,
+                field,
+            )
+            for field in [
+                "AIReason",
+                "AIBlockers",
+                "AINegativeFactors",
+                "AIPositiveFactors",
+                "OpportunityReasons",
+                "PriorityReasons",
+                "StrategySignal",
+                "StrategySetup",
+            ]
+            if row_text(
+                row,
+                field,
+            )
+        )
+        action_key = ai_action_key(
+            row_value(
+                row,
+                "AIDecision",
+                "RecommendedAction",
+                default="",
+            )
+        )
+    else:
+        text = str(row or "").strip()
+        action_key = "NO_ACTION"
+
     lowered = text.lower()
 
-    if "scanner" in lowered and "skip" in lowered:
-        return "สถานะ Scanner เป็น SKIP"
-    if "skip" in lowered:
-        return "สถานะ Scanner เป็น SKIP"
-    if "volume" in lowered or "rvol" in lowered:
-        return "รอ Volume"
     if "breakout" in lowered or "pivot" in lowered:
         return "รอ Breakout"
+    if "watch context" in lowered:
+        return "ยังอยู่ช่วงสะสม"
+    if "priority" in lowered:
+        return "แนวโน้มดี"
+    if "volume" in lowered or "rvol" in lowered:
+        return "รอ Volume"
+    if "skip" in lowered:
+        return "สถานะ Scanner เป็น SKIP"
+    if "exit" in lowered or "below stop" in lowered:
+        return "แนวโน้มเสีย"
+    if "rr" in lowered or "risk/reward" in lowered or "risk reward" in lowered:
+        return "Risk/Reward ยังไม่เหมาะ"
+    if "ema" in lowered:
+        return "EMA ยังไม่ยืนยัน"
+    if "risk" in lowered or "extended" in lowered or "chasing" in lowered:
+        return "Risk ยังไม่ผ่าน"
     if "trend" in lowered or "confirm" in lowered or "confirmation" in lowered:
         return "แนวโน้มยังไม่ยืนยัน"
-    if "below stop" in lowered or "stop" in lowered or "exit" in lowered:
-        return "หลุดแนวโน้ม"
-    if "risk" in lowered or "extended" in lowered or "chasing" in lowered:
-        return "ความเสี่ยงสูง"
     if "ready" in lowered or "buy" in lowered or "approval" in lowered:
         return "พร้อมเข้าซื้อ"
 
@@ -4634,7 +5078,17 @@ def shorten_ai_reason(reason, action=""):
             return "หลุดแนวโน้ม"
         return "ยังไม่เข้าเงื่อนไข"
 
-    return text[:77] + "..." if len(text) > 80 else text
+    return text[:57] + "..." if len(text) > 60 else text
+
+
+def shorten_ai_reason(reason, action=""):
+
+    return summarize_reason(
+        {
+            "AIReason": reason,
+            "AIDecision": action,
+        }
+    )
 
 
 def ai_sort_frame(df):
@@ -4696,10 +5150,9 @@ def build_ai_simple_table(df, show_all_watch=False):
             "AI Score": data["AIConfidence"],
             "Risk": data["AIRiskLevel"],
             "Reason": [
-                shorten_ai_reason(reason, action)
-                for reason, action in zip(
-                    data["AIReason"],
-                    data["AIDecision"],
+                summarize_reason(row)
+                for row in data.to_dict(
+                    orient="records",
                 )
             ],
         }

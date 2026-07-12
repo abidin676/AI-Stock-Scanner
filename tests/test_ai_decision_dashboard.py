@@ -6,8 +6,12 @@ from views.scanner import (
     ai_action_label,
     ai_empty_state_message,
     ai_summary_counts,
+    build_buy_checklist,
     build_ai_advanced_table,
     build_ai_simple_table,
+    buy_checklist_summary,
+    next_action_card,
+    summarize_reason,
 )
 
 
@@ -175,3 +179,165 @@ def test_original_dataframe_is_not_mutated_by_dashboard_helpers():
 
     assert original.columns.tolist() == before_columns
     pd.testing.assert_frame_equal(original, before_data)
+
+
+def checklist_row(**overrides):
+    row = {
+        "EMA9": 11,
+        "EMA20": 10,
+        "EMA50": 12,
+        "EMA200": 9,
+        "EMA20Improving": True,
+        "RSI": 55,
+        "RVOL": 1.7,
+        "PocketPivot": True,
+        "ExpansionScore": 10,
+        "RiskApproved": True,
+        "RR": 2.5,
+        "RiskPct": 3,
+        "AIDecision": "BUY",
+    }
+    row.update(overrides)
+    return row
+
+
+def passed_count(items):
+    return sum(1 for item in items if item["passed"])
+
+
+def test_summarize_reason_mapping():
+    assert summarize_reason({"AIReason": "Need Breakout confirmation"}) == "รอ Breakout"
+    assert summarize_reason({"AIReason": "Need Volume confirmation"}) == "รอ Volume"
+    assert summarize_reason({"AIReason": "Risk is still elevated"}) == "Risk ยังไม่ผ่าน"
+    assert summarize_reason({"AIReason": "Scanner status is SKIP"}) == "สถานะ Scanner เป็น SKIP"
+    assert summarize_reason({"AIReason": "Exit because setup invalidated"}) == "แนวโน้มเสีย"
+    assert summarize_reason({"AIReason": "LOW_RR blocker"}) == "Risk/Reward ยังไม่เหมาะ"
+    assert summarize_reason({"AIReason": "EMA confirmation missing"}) == "EMA ยังไม่ยืนยัน"
+    assert summarize_reason({"AIReason": "WATCH context accumulation"}) == "ยังอยู่ช่วงสะสม"
+
+
+def test_summarize_reason_unknown_truncates_to_sixty_chars():
+    reason = "x" * 100
+
+    summary = summarize_reason({"AIReason": reason})
+
+    assert len(summary) <= 60
+    assert summary.endswith("...")
+
+
+def test_buy_checklist_all_true():
+    checklist = build_buy_checklist(checklist_row())
+
+    assert passed_count(checklist) == 8
+    assert buy_checklist_summary(checklist) == "ผ่านแล้ว 8/8 เงื่อนไข"
+
+
+def test_buy_checklist_all_false():
+    checklist = build_buy_checklist(
+        checklist_row(
+            EMA9=9,
+            EMA20=10,
+            EMA50=8,
+            EMA200=9,
+            EMA20Improving=False,
+            DaysSinceEMA20SlopeTurnPositive=0,
+            RSI=75,
+            RVOL=0.7,
+            PocketPivot=False,
+            StrategySetup="Base forming",
+            ExpansionScore=90,
+            RiskApproved=False,
+            RR=0.5,
+            RiskPct=12,
+        )
+    )
+
+    assert passed_count(checklist) == 0
+    assert buy_checklist_summary(checklist) == "ผ่านแล้ว 0/8 เงื่อนไข"
+
+
+def test_buy_checklist_mixed_shows_missing_volume_and_breakout():
+    checklist = build_buy_checklist(
+        checklist_row(
+            RVOL=1.1,
+            PocketPivot=False,
+            StrategySetup="Seed base",
+        )
+    )
+    failed = {
+        item["label"]
+        for item in checklist
+        if not item["passed"]
+    }
+
+    assert passed_count(checklist) == 6
+    assert "RVOL >= 1.5x" in failed
+    assert "Breakout / Pivot ยืนยัน" in failed
+
+
+def test_buy_checklist_missing_columns_does_not_crash():
+    checklist = build_buy_checklist({})
+
+    assert len(checklist) == 8
+    assert passed_count(checklist) == 0
+
+
+def test_next_action_buy_prepare_watch_exit():
+    assert next_action_card(checklist_row()) == {
+        "Priority": "BUY",
+        "Message": "พร้อมเข้าซื้อ",
+    }
+
+    prepare = next_action_card(
+        checklist_row(
+            AIDecision="PREPARE",
+            RVOL=1.0,
+        )
+    )
+    assert prepare["Priority"] == "PREPARE"
+    assert prepare["Message"] == "รอ Volume มากกว่า 1.5x"
+
+    watch = next_action_card(
+        checklist_row(
+            AIDecision="WATCH",
+            EMA9=9,
+            EMA20=10,
+        )
+    )
+    assert watch["Priority"] == "WATCH"
+    assert watch["Message"] == "รอ EMA9 ตัด EMA20"
+
+    exit_action = next_action_card(
+        checklist_row(
+            AIDecision="EXIT",
+            AIBlockers="BELOW_STOP",
+        )
+    )
+    assert exit_action == {
+        "Priority": "EXIT",
+        "Message": "แนวโน้มเสียแล้ว",
+    }
+
+
+def test_next_action_uses_recommended_action_when_priority_action_is_badge():
+    action = next_action_card(
+        checklist_row(
+            AIDecision="",
+            PriorityAction="High Priority",
+            RecommendedAction="Buy",
+        )
+    )
+
+    assert action["Priority"] == "BUY"
+
+
+def test_new_ui_helpers_do_not_mutate_original_dataframe():
+    original = pd.DataFrame([checklist_row(Symbol="SAFE.BK")])
+    before = original.copy(deep=True)
+    row = original.iloc[0]
+
+    build_buy_checklist(row)
+    next_action_card(row)
+    summarize_reason(row)
+
+    pd.testing.assert_frame_equal(original, before)
