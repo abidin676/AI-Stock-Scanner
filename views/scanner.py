@@ -5207,6 +5207,10 @@ SIMPLE_DASHBOARD_WATCH_COLUMNS = [
 ]
 
 DEFAULT_SHOW_ADVANCED_DETAILS = False
+PURCHASE_ACTIONS = {"BUY", "PREPARE"}
+PURCHASE_EMPTY_STATE = (
+    "วันนี้ยังไม่มีหุ้นที่พร้อมซื้อ — รอ Setup และ Volume ยืนยัน"
+)
 
 
 def ai_action_key(value):
@@ -5443,6 +5447,39 @@ def simple_action_order(action):
         ai_action_key(action),
         4,
     )
+
+
+def actionable_purchase_candidates(candidates):
+
+    if candidates is None:
+        return pd.DataFrame()
+
+    data = candidates.copy()
+    if data.empty:
+        return data
+
+    if "_DisplayAction" in data.columns:
+        actions = data["_DisplayAction"].apply(ai_action_key)
+    elif "AIDecision" in data.columns:
+        actions = data["AIDecision"].apply(ai_action_key)
+    else:
+        return data.iloc[0:0].copy()
+
+    if "FreshCrossEligible" in data.columns:
+        eligible = data["FreshCrossEligible"].apply(_canonical_bool)
+    elif "_IsFreshEMACross" in data.columns:
+        eligible = data["_IsFreshEMACross"].apply(_canonical_bool)
+    else:
+        eligible = pd.Series(False, index=data.index)
+
+    data = data[eligible & actions.isin(PURCHASE_ACTIONS)].copy()
+    if data.empty:
+        return data
+
+    data["_DisplayAction"] = actions.loc[data.index]
+    data["_ActionLabel"] = data["_DisplayAction"].apply(simple_action_label)
+    data["_ActionOrder"] = data["_DisplayAction"].apply(simple_action_order)
+    return data
 
 
 def simple_market_status_label(score):
@@ -6235,7 +6272,7 @@ def scanner_results_view(
     )
     if show_all or data.empty:
         return data
-    return data[data["FreshCrossEligible"].apply(_canonical_bool)].copy()
+    return actionable_purchase_candidates(data)
 
 
 def simple_candidate_table(data):
@@ -6305,8 +6342,9 @@ def simple_pick_table(candidates, market, limit=5):
             ]
         )
 
+    actionable = actionable_purchase_candidates(candidates)
     data = top_five_candidates(
-        candidates,
+        actionable,
         market,
         limit=limit,
     )
@@ -6522,7 +6560,7 @@ def render_daily_market_summary(df, candidates, quality):
             stocks,
         )
         cols[index * 2 + 1].metric(
-            f"{market} BUY",
+            f"{market} ซื้อได้",
             buy_count,
         )
 
@@ -6535,13 +6573,18 @@ def render_daily_market_summary(df, candidates, quality):
 def render_todays_picks_simple(candidates):
 
     st.subheader("Today's Picks")
+    candidates = actionable_purchase_candidates(candidates)
+    if candidates.empty:
+        st.info(PURCHASE_EMPTY_STATE)
+        return
+
     set_col, usa_col = st.columns(2)
 
     with set_col:
         st.markdown("**Top 5 SET**")
         table = simple_pick_table(candidates, "SET")
         if table.empty:
-            st.info("ไม่มีรายการ")
+            st.info(PURCHASE_EMPTY_STATE)
         else:
             st.dataframe(
                 table,
@@ -6553,7 +6596,7 @@ def render_todays_picks_simple(candidates):
         st.markdown("**Top 5 USA**")
         table = simple_pick_table(candidates, "USA")
         if table.empty:
-            st.info("ไม่มีรายการ")
+            st.info(PURCHASE_EMPTY_STATE)
         else:
             st.dataframe(
                 table,
@@ -6562,40 +6605,9 @@ def render_todays_picks_simple(candidates):
             )
 
 
-def render_all_fresh_cross_candidates(candidates):
-
-    st.subheader("All Fresh Cross Candidates")
-    set_col, usa_col = st.columns(2)
-
-    with set_col:
-        st.markdown("**SET — All Eligible**")
-        table = all_fresh_cross_table(candidates, "SET")
-        if table.empty:
-            st.info("ไม่มีหุ้น SET ที่ผ่าน Fresh Cross hard gate")
-        else:
-            st.dataframe(table, use_container_width=True, hide_index=True)
-
-    with usa_col:
-        st.markdown("**USA — All Eligible**")
-        table = all_fresh_cross_table(candidates, "USA")
-        if table.empty:
-            st.info("ไม่มีหุ้น USA ที่ผ่าน Fresh Cross hard gate")
-        else:
-            st.dataframe(table, use_container_width=True, hide_index=True)
-
 def render_scanner_results_simple(candidates):
 
     st.subheader("Scanner Results")
-
-    show_all = st.checkbox(
-        "Show all",
-        value=False,
-        help=(
-            "แสดงหุ้นที่ EMA Cross เกินช่วง Fresh Cross, "
-            "EMA9 ต่ำกว่า EMA20 หรือไม่มีประวัติ Cross ด้วย"
-        ),
-        key="simple_scanner_show_all",
-    )
 
     search = st.text_input(
         "Search",
@@ -6605,7 +6617,7 @@ def render_scanner_results_simple(candidates):
     )
     data = scanner_results_view(
         candidates,
-        show_all=show_all,
+        show_all=False,
     )
 
     if search.strip() and not data.empty:
@@ -6626,11 +6638,14 @@ def render_scanner_results_simple(candidates):
             )
         ]
 
-    st.dataframe(
-        simple_candidate_table(data),
-        use_container_width=True,
-        hide_index=True,
-    )
+    if data.empty:
+        st.info(PURCHASE_EMPTY_STATE)
+    else:
+        st.dataframe(
+            simple_candidate_table(data),
+            use_container_width=True,
+            hide_index=True,
+        )
 
     return data
 
@@ -6639,15 +6654,10 @@ def render_stock_detail_simple(candidates):
 
     st.subheader("Stock Detail")
 
-    if candidates.empty:
-        st.info("ไม่มีหุ้นสำหรับแสดงรายละเอียด")
-        return
-
-    detail_source = candidates[
-        candidates["_DisplayAction"] != "AVOID"
-    ].copy()
+    detail_source = actionable_purchase_candidates(candidates)
     if detail_source.empty:
-        detail_source = candidates.head(50).copy()
+        st.info(PURCHASE_EMPTY_STATE)
+        return
 
     labels = [
         (
@@ -6717,18 +6727,15 @@ def render_stock_detail_simple(candidates):
 def render_daily_scanner_dashboard(df, quality):
 
     candidates = load_daily_candidates(df)
-    fresh_candidates = candidates[
-        candidates["FreshCrossEligible"].apply(_canonical_bool)
-    ].copy() if not candidates.empty else candidates.copy()
+    actionable_candidates = actionable_purchase_candidates(candidates)
     render_daily_market_summary(
         df,
-        fresh_candidates,
+        actionable_candidates,
         quality,
     )
-    render_todays_picks_simple(fresh_candidates)
-    render_all_fresh_cross_candidates(fresh_candidates)
-    filtered = render_scanner_results_simple(candidates)
-    render_stock_detail_simple(fresh_candidates)
+    render_todays_picks_simple(actionable_candidates)
+    render_scanner_results_simple(candidates)
+    render_stock_detail_simple(actionable_candidates)
 
 
 def render_ai_decision_center():

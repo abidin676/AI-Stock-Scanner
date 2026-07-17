@@ -8,6 +8,8 @@ from views.scanner import (
     AI_ADVANCED_COLUMNS,
     AI_SIMPLE_COLUMNS,
     DEFAULT_SHOW_ADVANCED_DETAILS,
+    PURCHASE_EMPTY_STATE,
+    actionable_purchase_candidates,
     ai_action_label,
     ai_empty_state_message,
     ai_summary_counts,
@@ -351,10 +353,22 @@ def test_simple_dashboard_deduplicates_symbol_market_across_sections():
 
 def test_daily_picks_show_top_five_per_market_with_simple_columns():
     rows = [
-        simple_ready_row(f"SET{i}.BK", "WATCH", Market="SET", AIConfidence=90 - i)
+        simple_ready_row(
+            f"SET{i}.BK",
+            "BUY",
+            Market="SET",
+            AIConfidence=90 - i,
+            RiskApproved=True,
+        )
         for i in range(7)
     ] + [
-        simple_ready_row(f"USA{i}", "WATCH", Market="USA", AIConfidence=80 - i)
+        simple_ready_row(
+            f"USA{i}",
+            "BUY",
+            Market="USA",
+            AIConfidence=80 - i,
+            RiskApproved=True,
+        )
         for i in range(6)
     ]
     candidates = prepare_daily_candidates(pd.DataFrame(rows))
@@ -467,6 +481,149 @@ def test_scanner_results_obey_canonical_ineligible_overlay_for_mo():
     assert "เฝ้าดู" not in rendered_text
 
 
+def test_default_purchase_ui_hides_watch_avoid_and_extended_rows():
+    candidates = prepare_daily_candidates(
+        pd.DataFrame(
+            [
+                simple_ready_row("BUY.BK", "BUY", RiskApproved=True),
+                simple_ready_row("PREP.BK", "WATCH", RVOL=1.39),
+                simple_ready_row("WATCH.BK", "WATCH"),
+                simple_ready_row("AVOID.BK", "AVOID"),
+                simple_ready_row("EXTENDED.BK", "WATCH", ExpansionScore=100),
+            ]
+        )
+    )
+    _, audit, fresh = scanner_view.rank_candidate_universe(candidates)
+
+    default_view = scanner_results_view(
+        candidates,
+        show_all=False,
+        fresh_candidates=fresh,
+        audit=audit,
+    )
+
+    assert default_view["Symbol"].tolist() == ["BUY.BK", "PREP.BK"]
+    assert set(default_view["_DisplayAction"]) == {"BUY", "PREPARE"}
+    assert not set(default_view["Symbol"]) & {
+        "WATCH.BK",
+        "AVOID.BK",
+        "EXTENDED.BK",
+    }
+
+
+def test_only_prepare_candidate_is_the_only_default_result():
+    candidates = prepare_daily_candidates(
+        pd.DataFrame(
+            [
+                simple_ready_row("PREP.BK", "WATCH", RVOL=1.39),
+                simple_ready_row("WATCH.BK", "WATCH"),
+            ]
+        )
+    )
+    actionable = actionable_purchase_candidates(candidates)
+    table = simple_candidate_table(actionable)
+
+    assert table["Symbol"].tolist() == ["PREP.BK"]
+    assert table["Action"].tolist() == ["ใกล้ซื้อ"]
+
+
+def test_no_buy_or_prepare_candidates_returns_purchase_empty_state():
+    candidates = prepare_daily_candidates(
+        pd.DataFrame(
+            [
+                simple_ready_row("WATCH.BK", "WATCH"),
+                simple_ready_row("AVOID.BK", "AVOID"),
+            ]
+        )
+    )
+
+    assert actionable_purchase_candidates(candidates).empty
+    assert PURCHASE_EMPTY_STATE == (
+        "วันนี้ยังไม่มีหุ้นที่พร้อมซื้อ — รอ Setup และ Volume ยืนยัน"
+    )
+
+
+def test_empty_purchase_universe_renders_clear_empty_state(monkeypatch):
+    messages = []
+    monkeypatch.setattr(scanner_view.st, "subheader", lambda *_: None)
+    monkeypatch.setattr(scanner_view.st, "info", messages.append)
+
+    scanner_view.render_todays_picks_simple(pd.DataFrame())
+
+    assert messages == [PURCHASE_EMPTY_STATE]
+
+
+def test_market_summary_uses_thai_buy_label_and_counts_real_buy(monkeypatch):
+    metrics = []
+
+    class MetricColumn:
+        def metric(self, label, value):
+            metrics.append((label, value))
+
+    monkeypatch.setattr(scanner_view.st, "subheader", lambda *_: None)
+    monkeypatch.setattr(
+        scanner_view.st,
+        "columns",
+        lambda count: [MetricColumn() for _ in range(count)],
+    )
+    scanner_view.render_daily_market_summary(
+        pd.DataFrame(
+            [
+                {"Market": "SET"},
+                {"Market": "USA"},
+            ]
+        ),
+        pd.DataFrame(
+            [
+                {"Market": "SET", "_DisplayAction": "BUY"},
+                {"Market": "SET", "_DisplayAction": "PREPARE"},
+            ]
+        ),
+        pd.DataFrame(),
+    )
+
+    metric_map = dict(metrics)
+    assert "SET BUY" not in metric_map
+    assert "USA BUY" not in metric_map
+    assert metric_map["SET ซื้อได้"] == 1
+    assert metric_map["USA ซื้อได้"] == 0
+
+
+def test_top_five_never_backfills_with_non_purchase_actions():
+    candidates = prepare_daily_candidates(
+        pd.DataFrame(
+            [
+                simple_ready_row(
+                    "BUY1.BK",
+                    "BUY",
+                    RiskApproved=True,
+                    AIConfidence=70,
+                ),
+                simple_ready_row(
+                    "BUY2.BK",
+                    "BUY",
+                    RiskApproved=True,
+                    AIConfidence=60,
+                ),
+                simple_ready_row("PREP.BK", "WATCH", RVOL=1.39, AIConfidence=50),
+                *[
+                    simple_ready_row(
+                        f"WATCH{i}.BK",
+                        "WATCH",
+                        AIConfidence=100 - i,
+                    )
+                    for i in range(5)
+                ],
+            ]
+        )
+    )
+
+    table = simple_pick_table(candidates, "SET")
+
+    assert table["Symbol"].tolist() == ["BUY1.BK", "BUY2.BK", "PREP.BK"]
+    assert set(table["Action"]) == {"ซื้อได้", "ใกล้ซื้อ"}
+
+
 @pytest.mark.parametrize(
     ("cross_age", "label", "reason"),
     [
@@ -566,11 +723,41 @@ def test_kpnreit_stale_cross_is_not_pick_or_prepare_but_remains_in_all_results()
 
 def test_candidates_sort_by_cross_age_then_ai_score():
     rows = [
-        simple_ready_row("AGE2.BK", AIConfidence=99, DaysSinceEMA9CrossEMA20=2),
-        simple_ready_row("AGE0LOW.BK", AIConfidence=70, DaysSinceEMA9CrossEMA20=0),
-        simple_ready_row("AGE1.BK", AIConfidence=100, DaysSinceEMA9CrossEMA20=1),
-        simple_ready_row("AGE0HIGH.BK", AIConfidence=90, DaysSinceEMA9CrossEMA20=0),
-        simple_ready_row("AGE3.BK", AIConfidence=100, DaysSinceEMA9CrossEMA20=3),
+        simple_ready_row(
+            "AGE2.BK",
+            "BUY",
+            RiskApproved=True,
+            AIConfidence=99,
+            DaysSinceEMA9CrossEMA20=2,
+        ),
+        simple_ready_row(
+            "AGE0LOW.BK",
+            "BUY",
+            RiskApproved=True,
+            AIConfidence=70,
+            DaysSinceEMA9CrossEMA20=0,
+        ),
+        simple_ready_row(
+            "AGE1.BK",
+            "BUY",
+            RiskApproved=True,
+            AIConfidence=100,
+            DaysSinceEMA9CrossEMA20=1,
+        ),
+        simple_ready_row(
+            "AGE0HIGH.BK",
+            "BUY",
+            RiskApproved=True,
+            AIConfidence=90,
+            DaysSinceEMA9CrossEMA20=0,
+        ),
+        simple_ready_row(
+            "AGE3.BK",
+            "BUY",
+            RiskApproved=True,
+            AIConfidence=100,
+            DaysSinceEMA9CrossEMA20=3,
+        ),
     ]
 
     candidates = prepare_daily_candidates(pd.DataFrame(rows))
