@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from config import rvol_action_for_market, rvol_thresholds_for_market
 from runtime_io import atomic_write_csv
 
 
@@ -31,6 +32,9 @@ PRIORITY_COLUMNS = [
     "PriorityReason",
     "AIRecommendedPriority",
     "AIRecommendationReason",
+    "RVOLAction",
+    "RVOLPrepareThreshold",
+    "RVOLBuyThreshold",
 ]
 
 
@@ -1111,26 +1115,54 @@ def get_priority_reasons(row, priority_mode):
     if not reasons:
         reasons = [f"{mode} ranking applied"]
 
+    market = text_value(row, "Market", "SET").upper()
+    rvol = safe_float(row.get("RVOL"), 0)
+    thresholds = rvol_thresholds_for_market(market)
+    volume_action = rvol_action_for_market(market, rvol)
+    if volume_action == "BUY":
+        reasons.append(
+            f"RVOL {rvol:.2f}x meets {market} BUY {thresholds['BUY']:g}x"
+        )
+    elif volume_action == "PREPARE":
+        reasons.append(
+            f"RVOL {rvol:.2f}x meets {market} PREPARE {thresholds['PREPARE']:g}x; "
+            f"BUY needs {thresholds['BUY']:g}x"
+        )
+    else:
+        reasons.append(
+            f"RVOL {rvol:.2f}x below {market} PREPARE {thresholds['PREPARE']:g}x"
+        )
+
     return "; ".join(reasons)
 
 
-def priority_action(score):
+def priority_action(score, row=None):
 
     score = safe_float(score, 0)
 
     if score >= 96:
-        return "Review First"
+        action = "Review First"
+    elif score >= 90:
+        action = "High Priority"
+    elif score >= 80:
+        action = "Watch Closely"
+    elif score >= 65:
+        action = "Monitor"
+    else:
+        action = "Low Priority"
 
-    if score >= 90:
-        return "High Priority"
+    if row is None:
+        return action
 
-    if score >= 80:
-        return "Watch Closely"
-
-    if score >= 65:
+    volume_action = rvol_action_for_market(
+        row.get("Market", "SET"),
+        row.get("RVOL", 0),
+    )
+    if volume_action == "WATCH" and action in {"Review First", "High Priority"}:
         return "Monitor"
-
-    return "Low Priority"
+    if volume_action == "PREPARE" and action in {"Review First", "High Priority"}:
+        return "Prepare"
+    return action
 
 
 def normalize_priority_mode(priority_mode):
@@ -1497,11 +1529,14 @@ def apply_priority_mode(
                 mode,
             )
         )
+        market = row.get("Market", "SET")
+        rvol = row.get("RVOL", 0)
+        rvol_thresholds = rvol_thresholds_for_market(market)
         rows.append({
             "PriorityMode": mode,
             "PriorityScore": score,
             "_PriorityTieBreaker": tie_breaker,
-            "PriorityAction": priority_action(score),
+            "PriorityAction": priority_action(score, row),
             "PriorityReasons": get_priority_reasons(
                 row,
                 mode,
@@ -1517,6 +1552,9 @@ def apply_priority_mode(
                 ai_recommended_priority or mode
             ),
             "AIRecommendationReason": ai_recommendation_reason,
+            "RVOLAction": rvol_action_for_market(market, rvol),
+            "RVOLPrepareThreshold": rvol_thresholds["PREPARE"],
+            "RVOLBuyThreshold": rvol_thresholds["BUY"],
         })
 
     prioritized = pd.concat(

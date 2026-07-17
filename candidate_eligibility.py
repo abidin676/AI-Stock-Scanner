@@ -7,6 +7,7 @@ import json
 
 import pandas as pd
 
+from config import rvol_action_for_market, rvol_thresholds_for_market
 from fresh_cross_policy import evaluate_fresh_cross_policy
 from fresh_cross_candidates import (
     fresh_cross_candidates,
@@ -64,6 +65,9 @@ class EligibilityResult:
     fresh_cross_status: str
     fresh_cross_status_label: str
     fresh_cross_reason: str
+    rvol_prepare_threshold: float
+    rvol_buy_threshold: float
+    rvol_action: str
 
 
 def safe_float(value: Any, default: float = 0.0) -> float:
@@ -209,6 +213,9 @@ def evaluate_candidate_eligibility(
     stop = safe_float(first_value(row, "StopPrice", "StopLoss", default=0))
     target = safe_float(first_value(row, "TargetPrice", "Target", default=0))
     ai_confidence = safe_float(row.get("AIConfidence"), default=100)
+    rvol = safe_float(row.get("RVOL"))
+    rvol_thresholds = rvol_thresholds_for_market(market)
+    rvol_action = rvol_action_for_market(market, rvol)
     proposal_status = upper_text(row.get("ProposalStatus"))
     risk_approved = upper_text(row.get("RiskApproved"))
 
@@ -241,6 +248,22 @@ def evaluate_candidate_eligibility(
     else:
         blocking.append(
             f"Fresh EMA cross required: {fresh_cross.status_label}"
+        )
+
+    if rvol >= rvol_thresholds["BUY"]:
+        passed.append(
+            f"RVOL meets {market} BUY threshold {rvol_thresholds['BUY']:g}x"
+        )
+    elif rvol >= rvol_thresholds["PREPARE"]:
+        passed.append(
+            f"RVOL meets {market} PREPARE threshold {rvol_thresholds['PREPARE']:g}x"
+        )
+        warnings.append(
+            f"RVOL {rvol:.2f}x below {market} BUY threshold {rvol_thresholds['BUY']:g}x"
+        )
+    else:
+        blocking.append(
+            f"RVOL {rvol:.2f}x below {market} PREPARE threshold {rvol_thresholds['PREPARE']:g}x"
         )
 
     buy_lifecycle_ok = (
@@ -295,15 +318,24 @@ def evaluate_candidate_eligibility(
             priority_score >= cfg.buy_min_priority_score
             and rr >= cfg.buy_min_rr
             and has_valid_order_prices
+            and rvol_action == "BUY"
         ):
             queue_class = "BUY"
             eligible_buy = True
 
-    if queue_class == "IGNORE" and not hard_blocked and prepare_lifecycle_ok:
+    if (
+        queue_class == "IGNORE"
+        and not hard_blocked
+        and (prepare_lifecycle_ok or buy_lifecycle_ok)
+    ):
         if (
-            seed_score >= cfg.prepare_min_seed_score
+            (
+                seed_score >= cfg.prepare_min_seed_score
+                or priority_score >= cfg.buy_min_priority_score
+            )
             and priority_score >= cfg.prepare_min_priority_score
             and rr >= cfg.prepare_min_rr
+            and rvol_action in {"PREPARE", "BUY"}
         ):
             queue_class = "PREPARE"
             eligible_watch = True
@@ -338,6 +370,9 @@ def evaluate_candidate_eligibility(
         fresh_cross_status=fresh_cross.status,
         fresh_cross_status_label=fresh_cross.status_label,
         fresh_cross_reason=fresh_cross.reason,
+        rvol_prepare_threshold=rvol_thresholds["PREPARE"],
+        rvol_buy_threshold=rvol_thresholds["BUY"],
+        rvol_action=rvol_action,
     )
 
 
@@ -457,6 +492,15 @@ def apply_eligibility_policy(
         result.fresh_cross_reason
         for result in results
     ]
+    data["RVOLPrepareThreshold"] = [
+        result.rvol_prepare_threshold
+        for result in results
+    ]
+    data["RVOLBuyThreshold"] = [
+        result.rvol_buy_threshold
+        for result in results
+    ]
+    data["RVOLAction"] = [result.rvol_action for result in results]
     if "CrossAgeSource" not in data.columns:
         data["CrossAgeSource"] = ""
     else:

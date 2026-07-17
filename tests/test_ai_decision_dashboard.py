@@ -298,8 +298,8 @@ def test_simple_dashboard_near_buy_uses_one_missing_condition():
     table = simple_near_buy_table(sections["near_buy"])
 
     assert table.iloc[0]["Symbol"] == "KPNREIT.BK"
-    assert table.iloc[0]["Missing Condition"] == "RVOL ≥ 1.5x"
-    assert table.iloc[0]["Next Action"] == "รอ Volume ยืนยัน"
+    assert table.iloc[0]["Missing Condition"] == "RVOL ≥ 1.5x (SET)"
+    assert table.iloc[0]["Next Action"] == "รอ RVOL จาก 1.39x ให้ถึง 1.5x เพื่อเป็นซื้อได้"
 
 
 def test_simple_dashboard_watch_section_limits_to_ten():
@@ -894,7 +894,7 @@ def test_buy_checklist_mixed_shows_missing_volume_and_breakout():
     }
 
     assert passed_count(checklist) == 6
-    assert "RVOL >= 1.5x" in failed
+    assert "RVOL >= 1.5x (SET)" in failed
     assert "Breakout / Pivot ยืนยัน" in failed
 
 
@@ -1039,7 +1039,7 @@ def test_next_action_buy_prepare_watch_exit():
         )
     )
     assert prepare["Priority"] == "PREPARE"
-    assert prepare["Message"] == "รอ Volume ยืนยัน โดย RVOL >= 1.5x"
+    assert prepare["Message"] == "รอ RVOL จาก 1.00x ให้ถึง 1.5x เพื่อเป็นซื้อได้"
 
     watch = next_action_card(
         checklist_row(

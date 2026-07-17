@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from config import rvol_thresholds_for_market
 from fresh_cross_candidates import fresh_cross_candidates
 from notification.console_notifier import ConsoleNotifier
 from notification.line_notifier import LineNotifier
@@ -306,6 +307,8 @@ def valid_seed_candidates(priority_results):
         return priority_results.copy()
 
     data = fresh_cross_candidates(priority_results)
+    if data.empty:
+        return data
 
     for column in [
         "Symbol",
@@ -320,8 +323,16 @@ def valid_seed_candidates(priority_results):
     lifecycle = data["LifecycleState"].astype(str).str.upper()
     signal = data["StrategySignal"].astype(str).str.upper()
     action = data["RecommendedAction"].astype(str).str.upper()
+    rvol = pd.to_numeric(
+        data.get("RVOL", pd.Series(0, index=data.index)),
+        errors="coerce",
+    ).fillna(0)
+    prepare_threshold = data["Market"].apply(
+        lambda market: rvol_thresholds_for_market(market)["PREPARE"]
+    )
     valid = data[
         data["FreshCrossEligible"]
+        & (rvol >= prepare_threshold)
         & (lifecycle == "SEED")
         & signal.str.contains("SEED", regex=False, na=False)
         & ~signal.str.contains(

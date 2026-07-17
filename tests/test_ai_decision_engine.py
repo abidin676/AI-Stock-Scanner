@@ -23,6 +23,7 @@ def strong_buy_row():
         "RR": 3,
         "PatternScore": 80,
         "FreshnessScore": 84,
+        "RVOL": 1.2,
     }
 
 

@@ -8,7 +8,12 @@ import pandas as pd
 import streamlit as st
 
 from candidate_eligibility import split_candidate_queues
-from config import MAX_FRESH_CROSS_DAYS, MAX_WORKERS
+from config import (
+    MAX_FRESH_CROSS_DAYS,
+    MAX_WORKERS,
+    rvol_action_for_market,
+    rvol_thresholds_for_market,
+)
 from data import PRICE_CACHE_DIR
 from fresh_cross_policy import (
     cross_age_label as policy_cross_age_label,
@@ -2411,6 +2416,36 @@ def row_number_or_none(row, *names):
         return None
 
 
+def market_rvol_context(row):
+
+    market = row_text(row, "Market").upper() or "SET"
+    rvol = row_number_or_none(row, "RVOL", "rvol")
+    thresholds = rvol_thresholds_for_market(market)
+    return {
+        "market": market,
+        "rvol": 0.0 if rvol is None else rvol,
+        "prepare": thresholds["PREPARE"],
+        "buy": thresholds["BUY"],
+        "action": rvol_action_for_market(market, rvol),
+    }
+
+
+def market_rvol_next_action(row):
+
+    context = market_rvol_context(row)
+    if context["rvol"] < context["prepare"]:
+        return (
+            f"รอ RVOL จาก {context['rvol']:.2f}x ให้ถึง "
+            f"{context['prepare']:g}x เพื่อเป็นใกล้ซื้อ"
+        )
+    if context["rvol"] < context["buy"]:
+        return (
+            f"รอ RVOL จาก {context['rvol']:.2f}x ให้ถึง "
+            f"{context['buy']:g}x เพื่อเป็นซื้อได้"
+        )
+    return ""
+
+
 def row_text(row, *names):
 
     value = row_value(row, *names, default="")
@@ -2562,6 +2597,7 @@ def build_buy_checklist(row):
     expansion = row_value(row, "ExpansionScore")
     rr = row_value(row, "RR", "RiskRewardRatio")
     risk_pct = row_value(row, "RiskPct", "StopDistancePct")
+    rvol_context = market_rvol_context(row)
 
     ema9_above_ema20 = ema_context["EMA9AboveEMA20"]
     ema_cross_fresh = ema_context["IsFreshEMA9Cross"]
@@ -2594,7 +2630,7 @@ def build_buy_checklist(row):
     )
 
     rvol_ready = (
-        safe_number(rvol) >= 1.5
+        safe_number(rvol) >= rvol_context["buy"]
         if rvol is not None
         else has_any_text(
             text,
@@ -2673,14 +2709,19 @@ def build_buy_checklist(row):
         "risk_passed": bool(risk_passed),
     }
 
-    return [
-        {
+    items = []
+    for key, label in BUY_CHECKLIST_LABELS.items():
+        if key == "rvol_ready":
+            label = (
+                f"RVOL >= {rvol_context['buy']:g}x "
+                f"({rvol_context['market']})"
+            )
+        items.append({
             "key": key,
             "label": label,
             "passed": values[key],
-        }
-        for key, label in BUY_CHECKLIST_LABELS.items()
-    ]
+        })
+    return items
 
 
 def buy_checklist_summary(items):
@@ -2784,7 +2825,7 @@ def next_action_message(row, checklist=None):
         )
 
     if not by_key.get("rvol_ready", False):
-        return "รอ Volume ยืนยัน โดย RVOL >= 1.5x"
+        return market_rvol_next_action(row)
 
     days_since_cross = ema_context.get("DaysSinceEMACross")
     expansion = safe_number(row_value(row, "ExpansionScore", default=0))
@@ -5465,6 +5506,21 @@ def actionable_purchase_candidates(candidates):
     else:
         return data.iloc[0:0].copy()
 
+    volume_actions = data.apply(
+        lambda row: rvol_action_for_market(
+            row.get("Market", "SET"),
+            row.get("RVOL", 0),
+        ),
+        axis=1,
+    )
+    effective_actions = actions.copy()
+    effective_actions.loc[
+        (actions == "BUY") & (volume_actions == "PREPARE")
+    ] = "PREPARE"
+    effective_actions.loc[
+        actions.isin(PURCHASE_ACTIONS) & (volume_actions == "WATCH")
+    ] = "WATCH"
+
     if "FreshCrossEligible" in data.columns:
         eligible = data["FreshCrossEligible"].apply(_canonical_bool)
     elif "_IsFreshEMACross" in data.columns:
@@ -5472,11 +5528,11 @@ def actionable_purchase_candidates(candidates):
     else:
         eligible = pd.Series(False, index=data.index)
 
-    data = data[eligible & actions.isin(PURCHASE_ACTIONS)].copy()
+    data = data[eligible & effective_actions.isin(PURCHASE_ACTIONS)].copy()
     if data.empty:
         return data
 
-    data["_DisplayAction"] = actions.loc[data.index]
+    data["_DisplayAction"] = effective_actions.loc[data.index]
     data["_ActionLabel"] = data["_DisplayAction"].apply(simple_action_label)
     data["_ActionOrder"] = data["_DisplayAction"].apply(simple_action_order)
     return data
@@ -5578,6 +5634,7 @@ def build_simple_readiness_checklist(row):
     rsi = row_number_or_none(row, "RSI")
     rvol = row_number_or_none(row, "RVOL", "rvol")
     expansion = row_number_or_none(row, "ExpansionScore")
+    rvol_context = market_rvol_context(row)
 
     ema20_ready = (
         row_bool(row, "EMA20Improving")
@@ -5625,9 +5682,15 @@ def build_simple_readiness_checklist(row):
         },
         {
             "key": "rvol_ready",
-            "label": "RVOL ≥ 1.5x",
-            "missing": "RVOL ≥ 1.5x",
-            "passed": rvol is not None and rvol >= 1.5,
+            "label": (
+                f"RVOL ≥ {rvol_context['buy']:g}x "
+                f"({rvol_context['market']})"
+            ),
+            "missing": (
+                f"RVOL ≥ {rvol_context['buy']:g}x "
+                f"({rvol_context['market']})"
+            ),
+            "passed": rvol is not None and rvol >= rvol_context["buy"],
         },
         {
             "key": "risk_passed",
@@ -5700,8 +5763,9 @@ def simple_next_action(row, status=None):
             return "ยังไม่มีประวัติ EMA9 ตัด EMA20"
         return f"EMA9 Cross เกิน {MAX_FRESH_CROSS_DAYS} วันทำการแล้ว"
 
-    if "RVOL ≥ 1.5x" in missing:
-        return "รอ Volume ยืนยัน"
+    rvol_message = market_rvol_next_action(row)
+    if rvol_message:
+        return rvol_message
 
     if "รอ EMA9 ตัดขึ้นเหนือ EMA20" in missing:
         return "รอ EMA9 ตัดขึ้นเหนือ EMA20"
@@ -5717,18 +5781,33 @@ def daily_action_for_row(row):
     action = ai_action_key(row_text(row, "AIDecision"))
     status = simple_checklist_status(row)
     is_fresh_cross = ema_check_context(row)["IsFreshEMA9Cross"]
+    rvol_context = market_rvol_context(row)
 
     if not is_fresh_cross:
         if action in {"BUY", "PREPARE", "WATCH", "HOLD"}:
             return "WATCH"
         return "AVOID"
 
-    if action == "BUY" and risk_approved_for_buy_now(row):
+    if (
+        action == "BUY"
+        and risk_approved_for_buy_now(row)
+        and rvol_context["action"] == "BUY"
+    ):
         return "BUY"
 
+    non_volume_ready = all(
+        item["passed"]
+        for item in status["checklist"]
+        if item["key"] != "rvol_ready"
+    )
     if (
-        action in {"BUY", "PREPARE", "WATCH"}
-        and status["passed"] == status["total"] - 1
+        (
+            rvol_context["action"] == "PREPARE"
+            and action in {"BUY", "PREPARE", "WATCH"}
+            or rvol_context["action"] == "BUY"
+            and action in {"BUY", "PREPARE"}
+        )
+        and non_volume_ready
     ):
         return "PREPARE"
 
@@ -5818,16 +5897,8 @@ def build_simple_dashboard_sections(ai_decisions, risk_proposals=None):
             "watch": canonical,
         }
 
-    decisions = canonical["AIDecision"].astype(str).str.upper()
-    buy_now_risk_passed = canonical.apply(
-        risk_approved_for_buy_now,
-        axis=1,
-    )
-
-    buy_now = canonical[
-        (decisions == "BUY")
-        & buy_now_risk_passed
-    ].copy()
+    display_actions = canonical["_DisplayAction"].apply(ai_action_key)
+    buy_now = canonical[display_actions == "BUY"].copy()
     buy_keys = set(
         zip(
             buy_now["Symbol"],
@@ -5840,17 +5911,7 @@ def build_simple_dashboard_sections(ai_decisions, risk_proposals=None):
             list(zip(canonical["Symbol"], canonical["Market"])),
             index=canonical.index,
         ).isin(buy_keys)
-        & decisions.isin(
-            [
-                "BUY",
-                "PREPARE",
-                "WATCH",
-            ]
-        )
-        & (
-            canonical["_PassedCount"]
-            == canonical["_TotalCount"] - 1
-        )
+        & (display_actions == "PREPARE")
     ].copy()
     near_buy_keys = set(
         zip(
@@ -5865,7 +5926,7 @@ def build_simple_dashboard_sections(ai_decisions, risk_proposals=None):
             list(zip(canonical["Symbol"], canonical["Market"])),
             index=canonical.index,
         ).isin(excluded_keys)
-        & (decisions == "WATCH")
+        & (display_actions == "WATCH")
     ].head(10).copy()
 
     return {
@@ -5919,7 +5980,9 @@ def prepare_daily_candidates(ai_decisions, risk_proposals=None):
         )
         record["_NextAction"] = simple_next_action(record, status)
         record["_SimpleReason"] = (
-            fresh_cross_reason(cross_age)
+            simple_next_action(record, status)
+            if is_fresh_cross and action == "PREPARE"
+            else fresh_cross_reason(cross_age)
             if is_fresh_cross
             else simple_next_action(record, status)
         )
@@ -5963,8 +6026,12 @@ def prepare_scanner_daily_candidates(df):
         cross_age = ema_context["DaysSinceEMACross"]
         is_fresh_cross = ema_context["IsFreshEMA9Cross"]
         signal_group = row_text(row, "_signal_group").upper()
+        rvol_action = rvol_action_for_market(
+            row.get("Market", "SET"),
+            row.get("RVOL", 0),
+        )
         if signal_group == "BUY":
-            action = "BUY"
+            action = rvol_action
         elif signal_group in {"WATCH", "EARLY"}:
             action = "WATCH"
         else:
@@ -5997,7 +6064,9 @@ def prepare_scanner_daily_candidates(df):
             "_ActionLabel": simple_action_label(action),
             "_ActionOrder": simple_action_order(action),
             "_SimpleReason": (
-                fresh_cross_reason(cross_age)
+                market_rvol_next_action(source)
+                if is_fresh_cross and action == "PREPARE"
+                else fresh_cross_reason(cross_age)
                 if is_fresh_cross
                 else (
                     "รอ EMA9 ตัดขึ้นเหนือ EMA20"

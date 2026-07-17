@@ -49,6 +49,51 @@ MIN_SCORE = 70
 # for a candidate to be considered a fresh cross.
 MAX_FRESH_CROSS_DAYS = 2
 
+# Market-specific relative-volume gates for actionable candidates.  Keep these
+# values centralized so scanner, AI, queues, alerts, ranking, and dashboard all
+# use the same definition of PREPARE and BUY.
+MARKET_RVOL_THRESHOLDS = {
+    "SET": {
+        "PREPARE": 1.0,
+        "BUY": 1.5,
+    },
+    "USA": {
+        "PREPARE": 0.8,
+        "BUY": 1.2,
+    },
+}
+
+
+def normalize_rvol_market(market):
+    """Return the supported market key, defaulting conservatively to SET."""
+
+    value = str(market or "").strip().upper()
+    if value in {"USA", "US", "US100", "SP500", "DOW30"}:
+        return "USA"
+    return "SET"
+
+
+def rvol_thresholds_for_market(market):
+    """Return a copy of the PREPARE/BUY RVOL thresholds for one market."""
+
+    return MARKET_RVOL_THRESHOLDS[normalize_rvol_market(market)].copy()
+
+
+def rvol_action_for_market(market, rvol):
+    """Classify RVOL without allowing volume to bypass any other hard gate."""
+
+    try:
+        value = float(rvol)
+    except (TypeError, ValueError):
+        value = 0.0
+
+    thresholds = rvol_thresholds_for_market(market)
+    if value >= thresholds["BUY"]:
+        return "BUY"
+    if value >= thresholds["PREPARE"]:
+        return "PREPARE"
+    return "WATCH"
+
 SHOW_ONLY = [
     "EARLY BUY",
     "WATCH",

@@ -7,6 +7,7 @@ from typing import Any, Mapping
 
 import pandas as pd
 
+from config import rvol_action_for_market, rvol_thresholds_for_market
 from runtime_io import atomic_write_csv
 
 
@@ -527,8 +528,18 @@ def negative_factors(inputs: Mapping[str, Any], blockers: list[str]) -> list[str
     if "EXTENDED" in blockers:
         factors.append("Move is extended")
 
-    if safe_float(inputs["rvol"]) > 0 and safe_float(inputs["rvol"]) < 0.8:
-        factors.append("Volume confirmation is weak")
+    rvol = safe_float(inputs["rvol"])
+    thresholds = rvol_thresholds_for_market(inputs["market"])
+    if rvol < thresholds["PREPARE"]:
+        factors.append(
+            f"RVOL {rvol:.2f}x is below {inputs['market']} PREPARE threshold "
+            f"{thresholds['PREPARE']:g}x"
+        )
+    elif rvol < thresholds["BUY"]:
+        factors.append(
+            f"RVOL {rvol:.2f}x is below {inputs['market']} BUY threshold "
+            f"{thresholds['BUY']:g}x"
+        )
 
     if safe_float(inputs["rsi"]) >= 70:
         factors.append("RSI is hot")
@@ -676,6 +687,7 @@ def choose_new_position_decision(
     priority_score = safe_float(inputs["priority_score"])
     opportunity_score = safe_float(inputs["opportunity_score"])
     lifecycle = safe_text(inputs["lifecycle"]).upper()
+    volume_action = rvol_action_for_market(inputs["market"], inputs["rvol"])
     signal_text = " ".join(
         [
             safe_text(inputs["signal"]),
@@ -701,6 +713,7 @@ def choose_new_position_decision(
         and not market_avoid
         and (not inputs["has_risk_pct"] or safe_float(inputs["risk_pct"]) <= config.max_buy_risk_pct)
         and (not inputs["has_rr"] or safe_float(inputs["rr"]) >= config.min_buy_rr)
+        and volume_action == "BUY"
     ):
         return "BUY"
 
@@ -708,6 +721,7 @@ def choose_new_position_decision(
         lifecycle in {"SEED", "EARLY"}
         and priority_score >= config.prepare_priority_score
         and opportunity_score >= config.prepare_opportunity_score
+        and volume_action in {"PREPARE", "BUY"}
     ):
         return "PREPARE"
 
@@ -898,12 +912,25 @@ def make_ai_decision(
             cfg,
         )
 
+    volume_action = rvol_action_for_market(inputs["market"], inputs["rvol"])
+    if not portfolio_context["has_position"]:
+        if decision == "BUY" and volume_action != "BUY":
+            decision = "PREPARE" if volume_action == "PREPARE" else "WATCH"
+        elif decision == "PREPARE" and volume_action == "WATCH":
+            decision = "WATCH"
+
     queue_class = safe_text(row_data.get("QueueClass")).upper()
     if not portfolio_context["has_position"] and queue_class:
         if queue_class == "BUY":
-            decision = "BUY"
+            decision = (
+                "BUY"
+                if volume_action == "BUY"
+                else "PREPARE"
+                if volume_action == "PREPARE"
+                else "WATCH"
+            )
         elif queue_class == "PREPARE":
-            decision = "PREPARE"
+            decision = "PREPARE" if volume_action != "WATCH" else "WATCH"
         elif queue_class == "WATCH":
             decision = "WATCH"
         elif queue_class == "IGNORE" and decision in {"BUY", "PREPARE"}:

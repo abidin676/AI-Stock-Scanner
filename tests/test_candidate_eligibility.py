@@ -35,6 +35,7 @@ def ranked_row(**overrides):
         "OpportunityScore": 76,
         "PriorityRank": 1,
         "PriorityScore": 90,
+        "RVOL": 1.6,
     }
     row.update(overrides)
     return row

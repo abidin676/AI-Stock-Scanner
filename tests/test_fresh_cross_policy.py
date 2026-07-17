@@ -39,6 +39,7 @@ def policy_row(**overrides):
         "EntryPrice": 10,
         "StopPrice": 9,
         "TargetPrice": 15,
+        "RVOL": 1.5,
     }
     row.update(overrides)
     return row
