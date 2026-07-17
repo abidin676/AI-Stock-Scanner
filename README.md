@@ -51,10 +51,14 @@ pip install -r requirements.txt
 
 ## Usage
 
-Run the scanner first:
+On Windows, double-click `AI Stock Scanner.bat` for the normal daily workflow. The launcher always waits for a fresh SET + USA scan (`--mode ALL --force-refresh`) to finish successfully before it opens the Dashboard. If the scan fails, the Dashboard is not opened and the launcher shows the error.
+
+Double-click `Open Dashboard Only.bat` only when you intentionally want to view the last successful output without running a new scan. Both launchers reuse an existing River Alpha Streamlit process when possible instead of starting duplicate Dashboard processes.
+
+To run the scanner manually:
 
 ```powershell
-python scanner.py
+python scanner.py --mode ALL --force-refresh
 ```
 
 Start the dashboard:

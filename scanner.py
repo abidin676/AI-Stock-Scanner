@@ -317,6 +317,31 @@ def resolve_scan_plan(mode="ALL"):
     return SCAN_MODE_PLANS[key]
 
 
+def incomplete_requested_markets(scan_metadata):
+
+    diagnostics = scan_metadata.get("MarketDiagnostics", {})
+    incomplete = []
+
+    for market in scan_metadata.get("ExpectedMarkets", []):
+        market = str(market).upper()
+        diagnostic = diagnostics.get(market, {})
+        processed_rows = int(
+            scan_metadata.get(
+                f"{market}SymbolsProcessed",
+                0,
+            )
+            or 0
+        )
+
+        if (
+            str(diagnostic.get("Status", "")).upper() == "FAILED"
+            or processed_rows <= 0
+        ):
+            incomplete.append(market)
+
+    return incomplete
+
+
 def dedupe_symbols(symbols):
 
     seen = set()
@@ -1652,18 +1677,26 @@ def main(
         completed_at=scan_completed_at,
         scan_run_id=scan_run_id,
     )
-    save_scan_metadata(scan_metadata)
     failures_path = save_scan_failures(scan_failures)
     print(f"Saved Scan Failures: {failures_path}")
 
     for warning in scan_metadata.get("Warnings", []):
         print(f"WARNING: {warning}")
 
+    incomplete_markets = incomplete_requested_markets(scan_metadata)
+
+    if incomplete_markets:
+        print(
+            "ERROR: Scan did not produce usable results for requested "
+            f"market(s): {', '.join(incomplete_markets)}"
+        )
+        return 1
+
     if df.empty:
 
         print("No Stocks")
 
-        return
+        return 1
 
     df = update_lifecycle_from_scan(
         df,
@@ -1719,25 +1752,6 @@ def main(
 
     alert_time = run_watchlist_alerts(df)
 
-    manifest = build_scan_manifest(
-        scan_metadata=scan_metadata,
-        started_at=scan_started_at,
-        completed_at=scan_metadata["ScanCompletedAt"],
-        mode=mode,
-        strategy_mode=strategy_mode,
-        force_refresh=force_refresh,
-        workers=workers,
-        scanner_rows=len(df),
-        opportunity_rows=len(opportunity_results),
-        priority_rows=len(priority_results),
-        ai_rows=len(ai_decisions),
-        proposal_rows=len(risk_proposals),
-    )
-    manifest_path = save_scan_manifest(manifest)
-    manifest["OutputFileTimestamps"] = output_file_timestamps(SCAN_OUTPUT_FILES)
-    save_scan_manifest(manifest)
-    print(f"\nSaved Scan Manifest: {manifest_path}")
-
     show_summary(df)
 
     total_time = time.perf_counter() - total_start
@@ -1757,6 +1771,33 @@ def main(
         scan_timings,
         total_time,
     )
+
+    # Publish completion metadata only after every scan output has succeeded.
+    # The dashboard treats this final atomic write as the successful-run marker.
+    scan_completed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    scan_metadata["ScanCompletedAt"] = scan_completed_at
+    manifest = build_scan_manifest(
+        scan_metadata=scan_metadata,
+        started_at=scan_started_at,
+        completed_at=scan_completed_at,
+        mode=mode,
+        strategy_mode=strategy_mode,
+        force_refresh=force_refresh,
+        workers=workers,
+        scanner_rows=len(df),
+        opportunity_rows=len(opportunity_results),
+        priority_rows=len(priority_results),
+        ai_rows=len(ai_decisions),
+        proposal_rows=len(risk_proposals),
+    )
+    manifest_path = save_scan_manifest(manifest)
+    manifest["OutputFileTimestamps"] = output_file_timestamps(SCAN_OUTPUT_FILES)
+    save_scan_manifest(manifest)
+    metadata_path = save_scan_metadata(scan_metadata)
+    print(f"\nSaved Scan Manifest: {manifest_path}")
+    print(f"Saved Scan Metadata: {metadata_path}")
+
+    return 0
 
 
 if __name__ == "__main__":
@@ -1793,9 +1834,11 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    main(
-        force_refresh=args.force_refresh,
-        mode=args.mode,
-        workers=args.workers,
-        strategy_mode=args.strategy_mode,
+    raise SystemExit(
+        main(
+            force_refresh=args.force_refresh,
+            mode=args.mode,
+            workers=args.workers,
+            strategy_mode=args.strategy_mode,
+        )
     )

@@ -2,6 +2,7 @@ import pandas as pd
 import pytest
 
 from config import MAX_FRESH_CROSS_DAYS
+import views.scanner as scanner_view
 
 from views.scanner import (
     AI_ADVANCED_COLUMNS,
@@ -26,6 +27,32 @@ from views.scanner import (
     strategy_mode_cli_arg,
     summarize_reason,
 )
+
+
+def test_dashboard_scans_always_force_refresh(monkeypatch):
+    captured = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return type(
+            "CompletedScan",
+            (),
+            {"returncode": 0, "stdout": "", "stderr": ""},
+        )()
+
+    monkeypatch.setattr(scanner_view.subprocess, "run", fake_run)
+
+    scanner_view.run_scanner_from_dashboard(
+        force_refresh=False,
+        mode="ALL",
+        workers=4,
+        strategy_mode="Standard",
+    )
+
+    assert captured["command"].count("--force-refresh") == 1
+    assert captured["command"][1:4] == ["scanner.py", "--mode", "ALL"]
+    assert captured["kwargs"]["cwd"] == scanner_view.PROJECT_ROOT
 
 
 def ai_row(symbol, decision, **overrides):

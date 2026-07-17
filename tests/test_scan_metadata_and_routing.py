@@ -18,6 +18,7 @@ def test_all_mode_routes_to_set_and_usa():
 def test_all_mode_merges_set_and_usa_results(monkeypatch):
     captured = {}
     calls = []
+    events = []
 
     def fake_scan_market(index, market, **kwargs):
         calls.append((index, market))
@@ -63,21 +64,67 @@ def test_all_mode_merges_set_and_usa_results(monkeypatch):
     monkeypatch.setattr(scanner, "save_profile_report", lambda profile: None)
     monkeypatch.setattr(scanner, "show_performance_report", lambda profile: None)
     monkeypatch.setattr(scanner, "show_scan_duration", lambda timings, total: None)
-    monkeypatch.setattr(scanner, "save_scan_metadata", lambda metadata: captured.setdefault("metadata", metadata))
+    def fake_save_scan_metadata(metadata):
+        events.append("metadata")
+        captured["metadata"] = metadata
+        return "output/scan_metadata.json"
+
+    monkeypatch.setattr(scanner, "save_scan_metadata", fake_save_scan_metadata)
     monkeypatch.setattr(scanner, "save_scan_failures", lambda failures: "output/scan_failures.csv")
     monkeypatch.setattr(scanner, "save_scan_manifest", lambda manifest: captured.setdefault("manifest", manifest))
     def fake_save_results(df):
+        events.append("results")
         captured["results"] = df.copy()
         return 0
 
     monkeypatch.setattr(scanner, "save_results", fake_save_results)
 
-    scanner.main(mode="ALL", workers=1)
+    exit_code = scanner.main(mode="ALL", workers=1)
 
+    assert exit_code == 0
     assert calls == [("SET", "SET"), ("USA ALL", "USA")]
     assert set(captured["results"]["Market"]) == {"SET", "USA"}
+    assert events.index("results") < events.index("metadata")
     assert captured["metadata"]["MarketDiagnostics"]["SET"]["Status"] == "OK"
     assert captured["metadata"]["MarketDiagnostics"]["USA"]["Status"] == "OK"
+
+
+def test_failed_empty_scan_does_not_publish_completion_metadata(monkeypatch):
+    metadata_calls = []
+
+    def fake_scan_market(index, market, **kwargs):
+        return pd.DataFrame(), {
+            "Index": index,
+            "Market": market,
+            "Symbols": 1,
+            "SymbolsRequested": 1,
+            "LoadedCount": 0,
+            "RowsProcessed": 0,
+            "NoDataCount": 1,
+            "FailedCount": 1,
+            "CachedCount": 0,
+            "DownloadedCount": 1,
+            "ErrorCount": 1,
+            "ProviderName": "mock",
+            "Status": "FAILED",
+            "Error": "provider unavailable",
+            "_FailureRows": [],
+            "Total Time": 0,
+            "Download Time": 0,
+            "Indicator Time": 0,
+            "Decision Time": 0,
+            "Processing Time": 0,
+            "Indicator Cache Hits": 0,
+        }
+
+    monkeypatch.setattr(scanner, "scan_market", fake_scan_market)
+    monkeypatch.setattr(scanner, "save_scan_failures", lambda failures: "output/scan_failures.csv")
+    monkeypatch.setattr(scanner, "save_scan_metadata", metadata_calls.append)
+
+    exit_code = scanner.main(mode="SET50", workers=1)
+
+    assert exit_code == 1
+    assert metadata_calls == []
 
 
 def test_all_metadata_reports_set_and_usa_success():
@@ -133,6 +180,30 @@ def test_all_metadata_warns_when_usa_has_zero_rows():
     assert metadata["USAError"] == "download timeout"
     assert metadata["MarketDiagnostics"]["USA"]["Status"] == "FAILED"
     assert any("USA scan requested" in warning for warning in metadata["Warnings"])
+    assert scanner.incomplete_requested_markets(metadata) == ["USA"]
+
+
+def test_partial_symbol_failures_are_not_a_fatal_market_failure():
+    metadata = build_scan_metadata(
+        requested_mode="SET50",
+        scan_timings=[
+            {
+                "Index": "SET50",
+                "Market": "SET",
+                "SymbolsRequested": 50,
+                "LoadedCount": 49,
+                "RowsProcessed": 49,
+                "FailedCount": 1,
+                "Status": "PARTIAL",
+            }
+        ],
+        result_rows={"SET": 49},
+        symbol_counts={"SET": 50},
+        errors={},
+    )
+
+    assert metadata["ScanStatus"] == "PARTIAL"
+    assert scanner.incomplete_requested_markets(metadata) == []
 
 
 def test_set_only_metadata_reports_usa_not_requested():

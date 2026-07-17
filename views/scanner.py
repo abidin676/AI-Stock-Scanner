@@ -6206,15 +6206,18 @@ def render_clean_scanner_header(last_scan, metadata, current_strategy):
 
     with st.spinner("Running scanner..."):
         result = run_scanner_from_dashboard(
-            force_refresh=force_clicked,
+            force_refresh=True,
             mode=scan_mode,
             workers=int(MAX_WORKERS),
             strategy_mode=current_strategy or "Standard",
         )
 
     if result.returncode == 0:
-        st.session_state["scanner_run_notice"] = "Scan complete"
+        st.session_state["scanner_run_notice"] = (
+            "Fresh scan complete. Dashboard output reloaded."
+        )
         st.rerun()
+        return
 
     st.error("Scanner failed. Open Advanced Tools for details.")
     st.session_state["scanner_last_error"] = (
@@ -7699,8 +7702,9 @@ def run_scanner_from_dashboard(force_refresh, mode, workers, strategy_mode):
         strategy_mode_cli_arg(strategy_mode),
     ]
 
-    if force_refresh:
-        command.append("--force-refresh")
+    # Dashboard-triggered scans always bypass cached market data. Keep the
+    # argument for call-site compatibility, but never allow a stale UI scan.
+    command.append("--force-refresh")
 
     return subprocess.run(
         command,
@@ -7746,7 +7750,7 @@ def render_scanner_actions():
         "Running scanner..."
     ):
         result = run_scanner_from_dashboard(
-            force_refresh=force_clicked,
+            force_refresh=True,
             mode=scan_mode,
             workers=workers,
             strategy_mode=strategy_mode,
@@ -7759,7 +7763,11 @@ def render_scanner_actions():
     ).strip()
 
     if result.returncode == 0:
-        st.success("Scanner completed.")
+        st.session_state["scanner_run_notice"] = (
+            "Fresh scan complete. Dashboard output reloaded."
+        )
+        st.rerun()
+        return
     else:
         st.error(
             f"Scanner failed with exit code {result.returncode}."
