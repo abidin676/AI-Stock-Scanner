@@ -19,6 +19,7 @@ from views.scanner import (
     ema_check_context,
     next_action_card,
     prepare_daily_candidates,
+    scanner_results_view,
     simple_candidate_table,
     simple_buy_now_table,
     simple_pick_table,
@@ -399,6 +400,71 @@ def test_scanner_results_table_uses_only_simple_columns():
         "Reason",
     ]
     assert table.iloc[0]["Action"] == "ใกล้ซื้อ"
+
+
+def test_scanner_results_obey_canonical_ineligible_overlay_for_mo():
+    candidates = prepare_daily_candidates(
+        pd.DataFrame(
+            [
+                simple_ready_row(
+                    "MO",
+                    "WATCH",
+                    Market="USA",
+                    ExpansionScore=100,
+                )
+            ]
+        )
+    )
+    audit = pd.DataFrame(
+        [
+            {
+                "Symbol": "MO",
+                "Market": "USA",
+                "LatestPriceDate": "2026-07-16",
+                "CrossDate": "2026-07-16",
+                "CrossAge": 0,
+                "CrossAgeSource": "days_since_bullish_ema_cross",
+                "EMA9": 71.770458,
+                "EMA20": 71.625901,
+                "PreviousEMA9": 71.455573,
+                "PreviousEMA20": 71.478101,
+                "EMA9AboveEMA20": True,
+                "BullishCrossEvent": True,
+                "FreshCrossEligible": False,
+                "FreshCrossStatus": "FRESH_CROSS",
+                "FreshCrossStatusLabel": "Fresh Cross",
+                "Rank": pd.NA,
+                "IncludedInTop5": False,
+                "Top5EligibilityReason": "EXTENDED",
+                "ExclusionReason": "EXTENDED",
+            }
+        ]
+    )
+    fresh = pd.DataFrame(columns=["Symbol", "Market"])
+
+    default_view = scanner_results_view(
+        candidates,
+        show_all=False,
+        fresh_candidates=fresh,
+        audit=audit,
+    )
+    diagnostic_view = scanner_results_view(
+        candidates,
+        show_all=True,
+        fresh_candidates=fresh,
+        audit=audit,
+    )
+    table = simple_candidate_table(diagnostic_view)
+
+    assert default_view.empty
+    assert diagnostic_view["Symbol"].tolist() == ["MO"]
+    assert diagnostic_view.iloc[0]["_DisplayAction"] == "INELIGIBLE"
+    assert table.iloc[0]["Action"] == "ไม่เข้าเกณฑ์"
+    assert table.iloc[0]["Cross Status"] == "EXTENDED"
+    assert table.iloc[0]["Reason"] == "EXTENDED"
+    rendered_text = " ".join(table.astype(str).iloc[0].tolist())
+    assert "Fresh Cross" not in rendered_text
+    assert "เฝ้าดู" not in rendered_text
 
 
 @pytest.mark.parametrize(

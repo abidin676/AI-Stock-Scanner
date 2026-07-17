@@ -16,7 +16,10 @@ from fresh_cross_policy import (
     fresh_cross_reason_for_age,
 )
 from fresh_cross_candidates import (
+    CANDIDATE_RANKING_AUDIT_FILE,
+    FRESH_CROSS_CANDIDATES_FILE,
     fresh_cross_candidates as canonical_fresh_cross_candidates,
+    rank_candidate_universe,
     top_five_candidates,
 )
 from market_quality import (
@@ -53,6 +56,8 @@ PRIORITY_RESULT_FILE = PRIORITY_FILE
 AI_DECISION_RESULT_FILE = Path("output") / "ai_decisions.csv"
 ORDER_PROPOSALS_FILE = Path("output") / "order_proposals.csv"
 RISK_SUMMARY_FILE = Path("output") / "risk_summary.csv"
+FRESH_CROSS_RESULT_FILE = FRESH_CROSS_CANDIDATES_FILE
+CANDIDATE_RANKING_AUDIT_RESULT_FILE = CANDIDATE_RANKING_AUDIT_FILE
 RESULT_FILES = [
     RESULT_CSV_FILE,
     RESULT_XLSX_FILE,
@@ -457,6 +462,40 @@ def load_ai_decisions_from_disk():
             f"Could not load AI decisions: {exc}"
         )
         return pd.DataFrame(), AI_DECISION_RESULT_FILE, True
+
+
+def load_candidate_ranking_outputs_from_disk():
+
+    fresh_missing = not FRESH_CROSS_RESULT_FILE.exists()
+    audit_missing = not CANDIDATE_RANKING_AUDIT_RESULT_FILE.exists()
+
+    try:
+        fresh = (
+            pd.read_csv(FRESH_CROSS_RESULT_FILE)
+            if not fresh_missing
+            else pd.DataFrame()
+        )
+    except pd.errors.EmptyDataError:
+        fresh = pd.DataFrame()
+    except Exception as exc:
+        st.warning(f"Could not load canonical Fresh Cross candidates: {exc}")
+        fresh = pd.DataFrame()
+        fresh_missing = True
+
+    try:
+        audit = (
+            pd.read_csv(CANDIDATE_RANKING_AUDIT_RESULT_FILE)
+            if not audit_missing
+            else pd.DataFrame()
+        )
+    except pd.errors.EmptyDataError:
+        audit = pd.DataFrame()
+    except Exception as exc:
+        st.warning(f"Could not load candidate ranking audit: {exc}")
+        audit = pd.DataFrame()
+        audit_missing = True
+
+    return fresh, audit, fresh_missing, audit_missing
 
 
 def load_order_proposals_from_disk():
@@ -5380,6 +5419,8 @@ def build_ai_advanced_table(df):
 def simple_action_label(action):
 
     action = ai_action_key(action)
+    if action == "INELIGIBLE":
+        return "ไม่เข้าเกณฑ์"
     if action == "BUY":
         return "ซื้อได้"
     if action in {"PREPARE", "NEAR BUY"}:
@@ -5995,15 +6036,206 @@ def load_daily_candidates(df):
     risk_proposals, _, risk_missing = load_order_proposals_from_disk()
 
     if ai_missing or ai_decisions.empty:
-        return prepare_scanner_daily_candidates(df)
+        prepared = prepare_scanner_daily_candidates(df)
+    else:
+        if risk_missing:
+            risk_proposals = None
 
-    if risk_missing:
-        risk_proposals = None
+        prepared = prepare_daily_candidates(
+            ai_decisions,
+            risk_proposals,
+        )
 
-    return prepare_daily_candidates(
-        ai_decisions,
-        risk_proposals,
+    fresh, audit, fresh_missing, audit_missing = (
+        load_candidate_ranking_outputs_from_disk()
     )
+    return merge_canonical_scanner_fields(
+        prepared,
+        fresh_candidates=None if fresh_missing else fresh,
+        audit=None if audit_missing else audit,
+    )
+
+
+def _canonical_bool(value):
+
+    if isinstance(value, bool):
+        return value
+    if value is None or pd.isna(value):
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().upper() in {"TRUE", "YES", "Y", "1"}
+
+
+def _canonical_keys(data):
+
+    return list(
+        zip(
+            data["Symbol"].fillna("").astype(str).str.upper().str.strip(),
+            data["Market"].fillna("").astype(str).str.upper().str.strip(),
+        )
+    )
+
+
+def merge_canonical_scanner_fields(
+    candidates,
+    fresh_candidates=None,
+    audit=None,
+):
+
+    if candidates is None:
+        return pd.DataFrame()
+
+    data = candidates.copy()
+    if data.empty:
+        data["FreshCrossEligible"] = pd.Series(dtype="bool")
+        data["_CanonicalEligibilityMerged"] = pd.Series(dtype="bool")
+        return data
+
+    for column in ["Symbol", "Market"]:
+        if column not in data.columns:
+            data[column] = ""
+
+    if audit is None or audit.empty:
+        _, calculated_audit, calculated_fresh = rank_candidate_universe(data)
+        audit = calculated_audit
+        if fresh_candidates is None:
+            fresh_candidates = calculated_fresh
+
+    audit_data = audit.copy() if audit is not None else pd.DataFrame()
+    if not audit_data.empty and {"Symbol", "Market"}.issubset(audit_data.columns):
+        audit_data["_SymbolKey"] = (
+            audit_data["Symbol"].fillna("").astype(str).str.upper().str.strip()
+        )
+        audit_data["_MarketKey"] = (
+            audit_data["Market"].fillna("").astype(str).str.upper().str.strip()
+        )
+        audit_data = audit_data.drop_duplicates(
+            subset=["_SymbolKey", "_MarketKey"],
+            keep="first",
+        ).set_index(["_SymbolKey", "_MarketKey"])
+    else:
+        audit_data = pd.DataFrame()
+
+    candidate_keys = _canonical_keys(data)
+    audit_keys = set(audit_data.index) if not audit_data.empty else set()
+    has_audit_row = pd.Series(
+        [key in audit_keys for key in candidate_keys],
+        index=data.index,
+    )
+    canonical_fields = {
+        "LatestPriceDate": "LatestPriceDate",
+        "CrossDate": "CrossDate",
+        "CrossAge": "DaysSinceEMA9CrossEMA20",
+        "CrossAgeSource": "CrossAgeSource",
+        "EMA9": "EMA9",
+        "EMA20": "EMA20",
+        "PreviousEMA9": "PreviousEMA9",
+        "PreviousEMA20": "PreviousEMA20",
+        "EMA9AboveEMA20": "EMA9AboveEMA20",
+        "BullishCrossEvent": "BullishCrossEvent",
+        "FreshCrossEligible": "FreshCrossEligible",
+        "FreshCrossStatus": "FreshCrossStatus",
+        "FreshCrossStatusLabel": "FreshCrossStatusLabel",
+        "Rank": "CanonicalRank",
+        "IncludedInTop5": "IncludedInTop5",
+        "Top5EligibilityReason": "Top5EligibilityReason",
+        "ExclusionReason": "ExclusionReason",
+    }
+    for source, target in canonical_fields.items():
+        if not audit_data.empty and source in audit_data.columns:
+            lookup = audit_data[source].to_dict()
+            data[target] = [lookup.get(key, pd.NA) for key in candidate_keys]
+        else:
+            data[target] = pd.NA
+
+    eligible = data["FreshCrossEligible"].apply(_canonical_bool)
+    if fresh_candidates is not None:
+        if (
+            not fresh_candidates.empty
+            and {"Symbol", "Market"}.issubset(fresh_candidates.columns)
+        ):
+            fresh_keys = set(_canonical_keys(fresh_candidates))
+        else:
+            fresh_keys = set()
+        in_fresh_file = pd.Series(
+            [key in fresh_keys for key in candidate_keys],
+            index=data.index,
+        )
+        missing_from_fresh = eligible & ~in_fresh_file
+        eligible = eligible & in_fresh_file
+    else:
+        missing_from_fresh = pd.Series(False, index=data.index)
+
+    data["FreshCrossEligible"] = eligible
+    data["IsFreshEMA9Cross"] = eligible
+    data["_IsFreshEMACross"] = eligible
+    data["_CanonicalEligibilityMerged"] = True
+    data["_CrossAge"] = pd.to_numeric(
+        data["DaysSinceEMA9CrossEMA20"],
+        errors="coerce",
+    )
+    data["_CrossAgeLabel"] = data["_CrossAge"].apply(format_cross_age)
+    data["_CrossAgeSort"] = data["_CrossAge"].fillna(float("inf"))
+    data["_FreshCrossOrder"] = (~eligible).astype(int)
+
+    reasons = data["ExclusionReason"].fillna("").astype(str).str.strip()
+    reasons.loc[missing_from_fresh] = "NOT_IN_CANONICAL_SET"
+    reasons.loc[~has_audit_row] = "NO_CANONICAL_AUDIT"
+    reasons = reasons.mask(
+        (~eligible) & reasons.eq(""),
+        "INELIGIBLE",
+    )
+    data["ExclusionReason"] = reasons
+    data["Top5EligibilityReason"] = data[
+        "Top5EligibilityReason"
+    ].fillna(reasons)
+
+    status_labels = data["FreshCrossStatusLabel"].fillna("").astype(str)
+    data["_FreshCrossStatusLabel"] = [
+        (status or "Fresh Cross")
+        if is_eligible
+        else ("EXTENDED" if reason.upper() == "EXTENDED" else "INELIGIBLE")
+        for status, is_eligible, reason in zip(
+            status_labels,
+            eligible,
+            reasons,
+        )
+    ]
+    data["FreshCrossStatus"] = data["_FreshCrossStatusLabel"]
+
+    ineligible = ~eligible
+    data.loc[ineligible, "AIDecision"] = "INELIGIBLE"
+    data.loc[ineligible, "_DisplayAction"] = "INELIGIBLE"
+    data.loc[ineligible, "_ActionLabel"] = "ไม่เข้าเกณฑ์"
+    data.loc[ineligible, "_ActionOrder"] = simple_action_order("INELIGIBLE")
+    data.loc[ineligible, "_SimpleReason"] = reasons.loc[ineligible]
+
+    return data
+
+
+def scanner_results_view(
+    candidates,
+    show_all=False,
+    fresh_candidates=None,
+    audit=None,
+):
+
+    if fresh_candidates is None and audit is None:
+        fresh, loaded_audit, fresh_missing, audit_missing = (
+            load_candidate_ranking_outputs_from_disk()
+        )
+        fresh_candidates = None if fresh_missing else fresh
+        audit = None if audit_missing else loaded_audit
+
+    data = merge_canonical_scanner_fields(
+        candidates,
+        fresh_candidates=fresh_candidates,
+        audit=audit,
+    )
+    if show_all or data.empty:
+        return data
+    return data[data["FreshCrossEligible"].apply(_canonical_bool)].copy()
 
 
 def simple_candidate_table(data):
@@ -6371,17 +6603,10 @@ def render_scanner_results_simple(candidates):
         placeholder="AAPL, PTT, KPNREIT",
         key="simple_scanner_search",
     )
-    data = candidates.copy()
-
-    if not show_all and not data.empty:
-        fresh = canonical_fresh_cross_candidates(data)
-        fresh_keys = set(zip(fresh["Symbol"], fresh["Market"]))
-        data = data[
-            pd.Series(
-                list(zip(data["Symbol"], data["Market"])),
-                index=data.index,
-            ).isin(fresh_keys)
-        ].copy()
+    data = scanner_results_view(
+        candidates,
+        show_all=show_all,
+    )
 
     if search.strip() and not data.empty:
         needles = [
@@ -6492,7 +6717,9 @@ def render_stock_detail_simple(candidates):
 def render_daily_scanner_dashboard(df, quality):
 
     candidates = load_daily_candidates(df)
-    fresh_candidates = canonical_fresh_cross_candidates(candidates)
+    fresh_candidates = candidates[
+        candidates["FreshCrossEligible"].apply(_canonical_bool)
+    ].copy() if not candidates.empty else candidates.copy()
     render_daily_market_summary(
         df,
         fresh_candidates,
