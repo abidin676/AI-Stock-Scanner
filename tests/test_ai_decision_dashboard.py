@@ -234,6 +234,12 @@ def simple_ready_row(symbol, decision="WATCH", **overrides):
         EMA20=10,
         EMA9AboveEMA20=True,
         DaysSinceEMA9CrossEMA20=0,
+        LatestPriceDate="2026-07-17",
+        CrossDate="2026-07-17",
+        CrossAgeSource="days_since_bullish_ema_cross",
+        PreviousEMA9=9.8,
+        PreviousEMA20=10,
+        BullishCrossEvent=True,
         DaysSinceEMA20SlopeTurnPositive=3,
         RSI=55,
         RVOL=1.6,
@@ -541,6 +547,12 @@ def checklist_row(**overrides):
         "EMA20": 10,
         "DaysSinceEMA9CrossEMA20": 0,
         "EMABullishCrossToday": True,
+        "LatestPriceDate": "2026-07-17",
+        "CrossDate": "2026-07-17",
+        "CrossAgeSource": "days_since_bullish_ema_cross",
+        "PreviousEMA9": 9.8,
+        "PreviousEMA20": 10,
+        "BullishCrossEvent": True,
         "EMA50": 12,
         "EMA200": 9,
         "EMA20Improving": True,
@@ -643,6 +655,8 @@ def test_ema_context_detects_bullish_cross_today():
             "CrossDate": "2026-07-17",
             "PreviousEMA9": 9.8,
             "PreviousEMA20": 10,
+            "CrossAgeSource": "days_since_bullish_ema_cross",
+            "BullishCrossEvent": True,
         }
     )
 
@@ -676,6 +690,10 @@ def test_ema_context_detects_cross_one_day_ago():
             "EMA9": 10.5,
             "EMA20": 10,
             "DaysSinceEMA9CrossEMA20": 1,
+            "LatestPriceDate": "2026-07-17",
+            "CrossDate": "2026-07-16",
+            "CrossAgeSource": "days_since_bullish_ema_cross",
+            "BullishCrossEvent": False,
         }
     )
 

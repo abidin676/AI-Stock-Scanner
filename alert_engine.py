@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from fresh_cross_policy import apply_fresh_cross_policy
+from fresh_cross_candidates import fresh_cross_candidates
 from notification.console_notifier import ConsoleNotifier
 from notification.line_notifier import LineNotifier
 from notification.telegram_notifier import TelegramNotifier
@@ -305,7 +305,7 @@ def valid_seed_candidates(priority_results):
     if priority_results.empty:
         return priority_results.copy()
 
-    data = apply_fresh_cross_policy(priority_results)
+    data = fresh_cross_candidates(priority_results)
 
     for column in [
         "Symbol",

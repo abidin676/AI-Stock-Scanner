@@ -11,10 +11,13 @@ from candidate_eligibility import split_candidate_queues
 from config import MAX_FRESH_CROSS_DAYS, MAX_WORKERS
 from data import PRICE_CACHE_DIR
 from fresh_cross_policy import (
-    apply_fresh_cross_policy,
     cross_age_label as policy_cross_age_label,
     evaluate_fresh_cross_policy,
     fresh_cross_reason_for_age,
+)
+from fresh_cross_candidates import (
+    fresh_cross_candidates as canonical_fresh_cross_candidates,
+    top_five_candidates,
 )
 from market_quality import (
     calculate_market_quality,
@@ -2478,7 +2481,18 @@ def ema_check_context(row):
         "FreshCrossStatus": fresh_cross.status,
         "FreshCrossStatusLabel": fresh_cross.status_label,
         "FreshCrossReason": fresh_cross.reason,
-        "CrossAgeSource": "days_since_bullish_ema_cross",
+        "CrossAgeSource": fresh_cross.cross_age_source,
+        "BullishCrossEvent": fresh_cross.bullish_cross_event,
+        "PreviousEMA9": row_number_or_none(
+            row,
+            "PreviousEMA9",
+            "previous_ema9",
+        ),
+        "PreviousEMA20": row_number_or_none(
+            row,
+            "PreviousEMA20",
+            "previous_ema20",
+        ),
         "RVOL": row_number_or_none(row, "RVOL", "rvol"),
         "ChecklistEMAFieldUsed": field_used,
     }
@@ -3624,7 +3638,7 @@ def valid_seed_opportunities(opportunities, market=None):
     if opportunities.empty:
         return opportunities.copy()
 
-    data = apply_fresh_cross_policy(opportunities)
+    data = canonical_fresh_cross_candidates(opportunities)
 
     for column in [
         "Market",
@@ -4520,10 +4534,7 @@ def render_buy_queue(opportunities):
     st.subheader("Buy Queue")
     st.caption("If you can buy only 5 today, review these first.")
 
-    fresh_opportunities = apply_fresh_cross_policy(opportunities)
-    fresh_opportunities = fresh_opportunities[
-        fresh_opportunities["FreshCrossEligible"]
-    ].copy()
+    fresh_opportunities = canonical_fresh_cross_candidates(opportunities)
     preferred = fresh_opportunities[
         fresh_opportunities.get(
             "PriorityAction",
@@ -5720,16 +5731,24 @@ def build_simple_dashboard_sections(ai_decisions, risk_proposals=None):
             "watch": empty,
         }
 
-    decisions = enriched["AIDecision"].astype(str).str.upper()
-    buy_now_risk_passed = enriched.apply(
+    canonical = canonical_fresh_cross_candidates(enriched)
+    if canonical.empty:
+        return {
+            "all": canonical,
+            "buy_now": canonical,
+            "near_buy": canonical,
+            "watch": canonical,
+        }
+
+    decisions = canonical["AIDecision"].astype(str).str.upper()
+    buy_now_risk_passed = canonical.apply(
         risk_approved_for_buy_now,
         axis=1,
     )
 
-    buy_now = enriched[
+    buy_now = canonical[
         (decisions == "BUY")
         & buy_now_risk_passed
-        & enriched["_IsFreshEMACross"]
     ].copy()
     buy_keys = set(
         zip(
@@ -5738,10 +5757,10 @@ def build_simple_dashboard_sections(ai_decisions, risk_proposals=None):
         )
     )
 
-    near_buy = enriched[
+    near_buy = canonical[
         ~pd.Series(
-            list(zip(enriched["Symbol"], enriched["Market"])),
-            index=enriched.index,
+            list(zip(canonical["Symbol"], canonical["Market"])),
+            index=canonical.index,
         ).isin(buy_keys)
         & decisions.isin(
             [
@@ -5750,10 +5769,9 @@ def build_simple_dashboard_sections(ai_decisions, risk_proposals=None):
                 "WATCH",
             ]
         )
-        & enriched["_IsFreshEMACross"]
         & (
-            enriched["_PassedCount"]
-            == enriched["_TotalCount"] - 1
+            canonical["_PassedCount"]
+            == canonical["_TotalCount"] - 1
         )
     ].copy()
     near_buy_keys = set(
@@ -5764,16 +5782,16 @@ def build_simple_dashboard_sections(ai_decisions, risk_proposals=None):
     )
     excluded_keys = buy_keys | near_buy_keys
 
-    watch = enriched[
+    watch = canonical[
         ~pd.Series(
-            list(zip(enriched["Symbol"], enriched["Market"])),
-            index=enriched.index,
+            list(zip(canonical["Symbol"], canonical["Market"])),
+            index=canonical.index,
         ).isin(excluded_keys)
         & (decisions == "WATCH")
     ].head(10).copy()
 
     return {
-        "all": enriched,
+        "all": canonical,
         "buy_now": buy_now,
         "near_buy": near_buy,
         "watch": watch,
@@ -5889,8 +5907,14 @@ def prepare_scanner_daily_candidates(df):
             "AIDecision": action,
             "EMA9": row.get("EMA9", None),
             "EMA20": row.get("EMA20", None),
+            "PreviousEMA9": row.get("PreviousEMA9", None),
+            "PreviousEMA20": row.get("PreviousEMA20", None),
             "EMA9AboveEMA20": ema_context["EMA9AboveEMA20"],
             "DaysSinceEMA9CrossEMA20": cross_age,
+            "LatestPriceDate": ema_context["LatestPriceDate"],
+            "CrossDate": ema_context["CrossDate"],
+            "CrossAgeSource": ema_context["CrossAgeSource"],
+            "BullishCrossEvent": ema_context["BullishCrossEvent"],
             "_DisplayAction": action,
             "_ActionLabel": simple_action_label(action),
             "_ActionOrder": simple_action_order(action),
@@ -6049,20 +6073,11 @@ def simple_pick_table(candidates, market, limit=5):
             ]
         )
 
-    data = candidates[
-        (candidates["Market"].astype(str).str.upper() == market)
-        & (candidates["_DisplayAction"] != "AVOID")
-        & candidates["_IsFreshEMACross"]
-    ].sort_values(
-        [
-            "_CrossAgeSort",
-            "AIConfidence",
-        ],
-        ascending=[
-            True,
-            False,
-        ],
-    ).head(limit)
+    data = top_five_candidates(
+        candidates,
+        market,
+        limit=limit,
+    )
 
     if data.empty:
         return pd.DataFrame(
@@ -6097,6 +6112,18 @@ def simple_pick_table(candidates, market, limit=5):
             "Reason",
         ]
     ]
+
+
+def all_fresh_cross_table(candidates, market):
+
+    fresh = canonical_fresh_cross_candidates(candidates)
+    if fresh.empty:
+        return simple_candidate_table(fresh)
+
+    market_rows = fresh[
+        fresh["Market"].astype(str).str.upper() == str(market).upper()
+    ].copy()
+    return simple_candidate_table(market_rows)
 
 
 def simple_buy_now_table(data):
@@ -6303,6 +6330,27 @@ def render_todays_picks_simple(candidates):
             )
 
 
+def render_all_fresh_cross_candidates(candidates):
+
+    st.subheader("All Fresh Cross Candidates")
+    set_col, usa_col = st.columns(2)
+
+    with set_col:
+        st.markdown("**SET — All Eligible**")
+        table = all_fresh_cross_table(candidates, "SET")
+        if table.empty:
+            st.info("ไม่มีหุ้น SET ที่ผ่าน Fresh Cross hard gate")
+        else:
+            st.dataframe(table, use_container_width=True, hide_index=True)
+
+    with usa_col:
+        st.markdown("**USA — All Eligible**")
+        table = all_fresh_cross_table(candidates, "USA")
+        if table.empty:
+            st.info("ไม่มีหุ้น USA ที่ผ่าน Fresh Cross hard gate")
+        else:
+            st.dataframe(table, use_container_width=True, hide_index=True)
+
 def render_scanner_results_simple(candidates):
 
     st.subheader("Scanner Results")
@@ -6326,7 +6374,14 @@ def render_scanner_results_simple(candidates):
     data = candidates.copy()
 
     if not show_all and not data.empty:
-        data = data[data["_IsFreshEMACross"]].copy()
+        fresh = canonical_fresh_cross_candidates(data)
+        fresh_keys = set(zip(fresh["Symbol"], fresh["Market"]))
+        data = data[
+            pd.Series(
+                list(zip(data["Symbol"], data["Market"])),
+                index=data.index,
+            ).isin(fresh_keys)
+        ].copy()
 
     if search.strip() and not data.empty:
         needles = [
@@ -6437,14 +6492,16 @@ def render_stock_detail_simple(candidates):
 def render_daily_scanner_dashboard(df, quality):
 
     candidates = load_daily_candidates(df)
+    fresh_candidates = canonical_fresh_cross_candidates(candidates)
     render_daily_market_summary(
         df,
-        candidates,
+        fresh_candidates,
         quality,
     )
-    render_todays_picks_simple(candidates)
+    render_todays_picks_simple(fresh_candidates)
+    render_all_fresh_cross_candidates(fresh_candidates)
     filtered = render_scanner_results_simple(candidates)
-    render_stock_detail_simple(filtered)
+    render_stock_detail_simple(fresh_candidates)
 
 
 def render_ai_decision_center():

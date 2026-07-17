@@ -8,6 +8,8 @@ import pandas as pd
 from config import MAX_FRESH_CROSS_DAYS
 
 
+AUTHORITATIVE_CROSS_AGE_SOURCE = "days_since_bullish_ema_cross"
+
 FRESH_CROSS_COLUMNS = [
     "FreshCrossEligible",
     "IsFreshEMA9Cross",
@@ -19,6 +21,7 @@ FRESH_CROSS_COLUMNS = [
     "CrossAgeSource",
     "LatestPriceDate",
     "CrossDate",
+    "BullishCrossEvent",
 ]
 
 
@@ -33,6 +36,8 @@ class FreshCrossResult:
     reason: str
     latest_price_date: str
     cross_date: str
+    cross_age_source: str
+    bullish_cross_event: bool
 
 
 def _value(row: Mapping[str, Any], *names: str) -> Any:
@@ -101,6 +106,15 @@ def _bool(value: Any) -> bool:
     }
 
 
+def _text(value: Any) -> str:
+    try:
+        if value is None or pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    return str(value).strip()
+
+
 def cross_age_label(value: Any) -> str:
     age = _number_or_none(value)
     if age is None or age < 0 or not age.is_integer():
@@ -135,11 +149,21 @@ def evaluate_fresh_cross_policy(
     cross_date = _date_text(
         _value(row, "CrossDate", "ema9_cross_date")
     )
+    cross_age_source = _text(_value(row, "CrossAgeSource"))
+    previous_ema9 = _number_or_none(
+        _value(row, "PreviousEMA9", "previous_ema9")
+    )
+    previous_ema20 = _number_or_none(
+        _value(row, "PreviousEMA20", "previous_ema20")
+    )
+    bullish_cross_event = _bool(
+        _value(row, "BullishCrossEvent")
+    )
 
     if ema9 is not None and ema20 is not None:
         ema9_above_ema20 = ema9 > ema20
     else:
-        ema9_above_ema20 = _bool(_value(row, "EMA9AboveEMA20"))
+        ema9_above_ema20 = False
 
     age = None
     if (
@@ -149,13 +173,38 @@ def evaluate_fresh_cross_policy(
     ):
         age = int(age_number)
 
+    authoritative_cross_history = (
+        bool(latest_price_date)
+        and bool(cross_date)
+        and cross_age_source == AUTHORITATIVE_CROSS_AGE_SOURCE
+    )
+    current_cross_event_is_valid = (
+        age != 0
+        or (
+            bullish_cross_event
+            and ema9 is not None
+            and ema20 is not None
+            and previous_ema9 is not None
+            and previous_ema20 is not None
+            and ema9 > ema20
+            and previous_ema9 <= previous_ema20
+            and bool(latest_price_date)
+            and cross_date == latest_price_date
+        )
+    )
     eligible = (
         ema9_above_ema20
         and age is not None
         and age <= MAX_FRESH_CROSS_DAYS
+        and authoritative_cross_history
+        and current_cross_event_is_valid
     )
 
-    if age is None:
+    if (
+        age is None
+        or not authoritative_cross_history
+        or not current_cross_event_is_valid
+    ):
         status = "NO_CROSS"
         status_label = "ยังไม่ Cross"
         reason = "ยังไม่มีประวัติ EMA9 ตัด EMA20"
@@ -182,6 +231,8 @@ def evaluate_fresh_cross_policy(
         reason=reason,
         latest_price_date=latest_price_date,
         cross_date=cross_date,
+        cross_age_source=cross_age_source,
+        bullish_cross_event=bullish_cross_event,
     )
 
 
@@ -210,10 +261,17 @@ def apply_fresh_cross_policy(dataframe: pd.DataFrame | None) -> pd.DataFrame:
         for result in results
     ]
     data["FreshCrossReason"] = [result.reason for result in results]
-    data["CrossAgeSource"] = "days_since_bullish_ema_cross"
+    data["CrossAgeSource"] = [
+        result.cross_age_source
+        for result in results
+    ]
     data["LatestPriceDate"] = [
         result.latest_price_date
         for result in results
     ]
     data["CrossDate"] = [result.cross_date for result in results]
+    data["BullishCrossEvent"] = [
+        result.bullish_cross_event
+        for result in results
+    ]
     return data

@@ -32,6 +32,9 @@ This project is designed as a decision-support tool, not an automated trading bo
 - Scanner Results can display all symbols through `Show all`, but non-fresh rows are diagnostic only and are labeled `Cross เก่า`, `ยังไม่ Cross`, or `EMA9 ต่ำกว่า EMA20`.
 - No dashboard toggle promotes a non-fresh row into a main recommendation.
 - Scanner output includes `LatestPriceDate` and `CrossDate` so provider-confirmed daily data can be compared with TradingView's potentially live daily bar. The matching Pine reference is `tradingview/river_alpha_early_trend.pine`.
+- `output/fresh_cross_candidates.csv` is the canonical eligible universe. Top 5 SET/USA are deterministic rankings taken from this set; they do not define or truncate the universe.
+- Canonical ranking sorts by cross age (Today, 1D, 2D), then AI score descending, priority score descending, and symbol ascending as the deterministic tie-breaker.
+- `output/candidate_ranking_audit.csv` records every symbol's cross provenance, hard-gate result, canonical rank, Top 5 inclusion, and one primary exclusion reason.
 
 ## Screenshot
 
@@ -83,6 +86,8 @@ http://localhost:8501
 
 - `output/scanner_results.csv`
 - `output/scanner_results.xlsx`
+- `output/fresh_cross_candidates.csv`
+- `output/candidate_ranking_audit.csv`
 - `output/market_quality.csv`
 - `data/watchlist.csv`
 - `data/portfolio.csv`

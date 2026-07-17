@@ -58,6 +58,25 @@ def test_all_mode_merges_set_and_usa_results(monkeypatch):
     monkeypatch.setattr(scanner, "save_opportunity_summary", lambda df, quality: (df, 0))
     monkeypatch.setattr(scanner, "save_priority_summary", lambda df, quality: (df, 0))
     monkeypatch.setattr(scanner, "save_ai_decision_summary", lambda df: (df, 0))
+    def fake_save_candidate_ranking_outputs(df):
+        audit = df[["Symbol", "Market"]].copy()
+        audit["FreshCrossEligible"] = False
+        audit["Rank"] = pd.NA
+        audit["IncludedInTop5"] = False
+        audit["Top5EligibilityReason"] = "NO_CROSS_EVENT"
+        audit["ExclusionReason"] = "NO_CROSS_EVENT"
+        return (
+            pd.DataFrame(),
+            audit,
+            "output/fresh_cross_candidates.csv",
+            "output/candidate_ranking_audit.csv",
+        )
+
+    monkeypatch.setattr(
+        scanner,
+        "save_candidate_ranking_outputs",
+        fake_save_candidate_ranking_outputs,
+    )
     monkeypatch.setattr(scanner, "save_risk_manager_summary", lambda df: (0, pd.DataFrame(), pd.DataFrame()))
     monkeypatch.setattr(scanner, "run_watchlist_alerts", lambda df: 0)
     monkeypatch.setattr(scanner, "show_summary", lambda df: None)

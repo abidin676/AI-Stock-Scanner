@@ -12,6 +12,8 @@ from providers.thai import get_symbols
 from candidate_eligibility import apply_eligibility_policy
 from data import get_histories, is_price_cache_fresh, price_cache_path
 from fresh_cross_policy import evaluate_fresh_cross_policy
+from fresh_cross_policy import AUTHORITATIVE_CROSS_AGE_SOURCE
+from fresh_cross_candidates import save_candidate_ranking_outputs
 from indicators import add_indicators_cached
 from strategy import trend_start
 from strategy_modes import (
@@ -93,6 +95,8 @@ SCAN_OUTPUT_FILES = [
     os.path.join(OUTPUT_DIR, "scan_metadata.json"),
     os.path.join(OUTPUT_DIR, "scan_failures.csv"),
     os.path.join(OUTPUT_DIR, "scan_run_manifest.json"),
+    os.path.join(OUTPUT_DIR, "fresh_cross_candidates.csv"),
+    os.path.join(OUTPUT_DIR, "candidate_ranking_audit.csv"),
 ]
 
 try:
@@ -452,8 +456,11 @@ def process_symbol(
         [],
     )
     latest = df.iloc[-1]
+    previous = df.iloc[-2] if len(df) >= 2 else pd.Series(dtype="object")
     latest_ema9 = _float_or_none(latest.get("ema9", None))
     latest_ema20 = _float_or_none(latest.get("ema20", None))
+    previous_ema9 = _float_or_none(previous.get("ema9", None))
+    previous_ema20 = _float_or_none(previous.get("ema20", None))
     ema9_above_ema20 = (
         latest_ema9 is not None
         and latest_ema20 is not None
@@ -462,9 +469,17 @@ def process_symbol(
     days_since_ema_cross = _float_or_none(
         latest.get("days_since_ema9_cross_ema20", None)
     )
+    bullish_cross_event = (
+        latest_ema9 is not None
+        and latest_ema20 is not None
+        and previous_ema9 is not None
+        and previous_ema20 is not None
+        and latest_ema9 > latest_ema20
+        and previous_ema9 <= previous_ema20
+    )
     ema_bullish_cross_today = (
         days_since_ema_cross == 0
-        and ema9_above_ema20
+        and bullish_cross_event
     )
     latest_price_date = _format_price_date(latest.get("date", ""))
     cross_date = _format_price_date(latest.get("ema9_cross_date", ""))
@@ -475,6 +490,10 @@ def process_symbol(
             "DaysSinceEMA9CrossEMA20": days_since_ema_cross,
             "LatestPriceDate": latest_price_date,
             "CrossDate": cross_date,
+            "CrossAgeSource": AUTHORITATIVE_CROSS_AGE_SOURCE,
+            "PreviousEMA9": previous_ema9,
+            "PreviousEMA20": previous_ema20,
+            "BullishCrossEvent": bullish_cross_event,
         }
     )
     ema_cross_within_fresh_days = (
@@ -613,16 +632,21 @@ def process_symbol(
             "CrossDate": cross_date,
             "EMA9": latest.get("ema9", 0),
             "EMA20": latest.get("ema20", 0),
+            "PreviousEMA9": previous_ema9,
+            "PreviousEMA20": previous_ema20,
             "EMA50": latest.get("ema50", 0),
             "EMA200": latest.get("ema200", 0),
             "EMA9AboveEMA20": ema9_above_ema20,
             "EMABullishCrossToday": ema_bullish_cross_today,
+            "BullishCrossEvent": bullish_cross_event,
             "EMACrossWithinFreshDays": ema_cross_within_fresh_days,
             "IsFreshEMA9Cross": is_fresh_ema9_cross,
+            "FreshCrossEligible": is_fresh_ema9_cross,
             "FreshCrossStatus": fresh_cross.status,
             "FreshCrossStatusLabel": fresh_cross.status_label,
             "FreshCrossReason": fresh_cross.reason,
-            "CrossAgeSource": "days_since_bullish_ema_cross",
+            "CrossAgeSource": AUTHORITATIVE_CROSS_AGE_SOURCE,
+            "Top5EligibilityReason": "PENDING_CANONICAL_RANK",
             "DaysSinceEMACross": days_since_ema_cross,
             "Low90": latest.get("low90", 0),
             "High20": latest.get("high20", 0),
@@ -1733,9 +1757,54 @@ def main(
         market_quality,
     )
     ai_decisions, ai_time = save_ai_decision_summary(priority_results)
+    ranking_source = (
+        ai_decisions
+        if ai_decisions is not None and not ai_decisions.empty
+        else priority_results
+    )
+    (
+        fresh_cross_candidates,
+        candidate_ranking_audit,
+        fresh_candidates_path,
+        ranking_audit_path,
+    ) = save_candidate_ranking_outputs(ranking_source)
+    print(
+        "\nSaved Fresh Cross Candidates: "
+        f"{fresh_candidates_path} ({len(fresh_cross_candidates)} rows)"
+    )
+    print(
+        "Saved Candidate Ranking Audit: "
+        f"{ranking_audit_path} ({len(candidate_ranking_audit)} rows)"
+    )
     risk_time, risk_proposals, risk_summary = save_risk_manager_summary(ai_decisions)
 
     df = priority_results
+    audit_columns = [
+        "Symbol",
+        "Market",
+        "FreshCrossEligible",
+        "Rank",
+        "IncludedInTop5",
+        "Top5EligibilityReason",
+        "ExclusionReason",
+    ]
+    audit_debug = candidate_ranking_audit[audit_columns].rename(
+        columns={"Rank": "CanonicalRank"}
+    )
+    df = df.drop(
+        columns=[
+            "FreshCrossEligible",
+            "CanonicalRank",
+            "IncludedInTop5",
+            "Top5EligibilityReason",
+            "ExclusionReason",
+        ],
+        errors="ignore",
+    ).merge(
+        audit_debug,
+        on=["Symbol", "Market"],
+        how="left",
+    )
 
     df = df.sort_values(
         by="PriorityScore"

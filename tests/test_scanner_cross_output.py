@@ -26,8 +26,21 @@ def strategy_result():
 
 
 def indicator_frame(cross_age, cross_date):
+    previous_ema9 = 9 if cross_age == 0 else 10.5
     return pd.DataFrame(
         [
+            {
+                "date": "2026-07-16",
+                "close": 9.5,
+                "ema9": previous_ema9,
+                "ema20": 10,
+                "ema9_cross_date": cross_date,
+                "days_since_ema9_cross_ema20": (
+                    cross_age - 1
+                    if cross_age is not None and not pd.isna(cross_age)
+                    else cross_age
+                ),
+            },
             {
                 "date": "2026-07-17",
                 "close": 10,

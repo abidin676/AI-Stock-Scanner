@@ -1238,10 +1238,18 @@ def ensure_priority_inputs(df):
 
     for column in numeric_columns:
         if column in data.columns:
-            data[column] = pd.to_numeric(
+            numeric = pd.to_numeric(
                 data[column],
                 errors="coerce",
-            ).fillna(0)
+            )
+            if column in {
+                "DaysSinceEMA20SlopeTurnPositive",
+                "DaysSinceEMA9CrossEMA20",
+                "DaysSinceBreakout",
+            }:
+                data[column] = numeric
+            else:
+                data[column] = numeric.fillna(0)
 
     data["LifecycleState"] = (
         data["LifecycleState"]

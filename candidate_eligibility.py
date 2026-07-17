@@ -8,12 +8,15 @@ import json
 import pandas as pd
 
 from fresh_cross_policy import evaluate_fresh_cross_policy
+from fresh_cross_candidates import (
+    fresh_cross_candidates,
+    is_candidate_extended,
+)
 
 
 POLICY_CONFIG_FILE = Path("config") / "candidate_eligibility_config.json"
 DEFAULT_POLICY_VERSION = "fresh_ema_cross_0_2_v1"
 VALID_MARKETS = {"SET", "USA"}
-EXTENDED_TERMS = {"EXTENDED", "MOMENTUM EXTENDED", "CHASING"}
 SKIP_TERMS = {"SKIP", "NO DATA", "NO_DATA", "AVOID"}
 RISK_REJECTED_STATUSES = {"REJECTED"}
 
@@ -154,14 +157,7 @@ def signal_text(row: pd.Series | Mapping[str, Any]) -> str:
 
 
 def is_extended(row: pd.Series | Mapping[str, Any]) -> bool:
-    lifecycle = upper_text(row.get("LifecycleState"))
-    text = signal_text(row)
-    expansion = safe_float(row.get("ExpansionScore"))
-    distance_ema20 = safe_float(first_value(row, "DistanceEMA20Pct", "DistanceFromEMA20Pct", default=0))
-    return (
-        lifecycle in {"EXTENDED", "MOMENTUM"}
-        and expansion >= 70
-    ) or any(term in text for term in EXTENDED_TERMS) or distance_ema20 > 12
+    return is_candidate_extended(row)
 
 
 def has_skip_signal(row: pd.Series | Mapping[str, Any]) -> bool:
@@ -461,7 +457,10 @@ def apply_eligibility_policy(
         result.fresh_cross_reason
         for result in results
     ]
-    data["CrossAgeSource"] = "days_since_bullish_ema_cross"
+    if "CrossAgeSource" not in data.columns:
+        data["CrossAgeSource"] = ""
+    else:
+        data["CrossAgeSource"] = data["CrossAgeSource"].fillna("")
     data["EligibilityReasons"] = data["BlockingReasons"]
     data["BuyQueueEligible"] = data["EligibleForBuyQueue"]
     data["WatchQueueEligible"] = data["EligibleForWatchQueue"]
@@ -500,6 +499,21 @@ def split_candidate_queues(
     data[rank_column] = pd.to_numeric(data[rank_column], errors="coerce").fillna(999999)
     data[score_column] = pd.to_numeric(data[score_column], errors="coerce").fillna(0)
     data = data.sort_values([rank_column, score_column], ascending=[True, False]).reset_index(drop=True)
+
+    canonical = fresh_cross_candidates(data)
+    canonical_keys = set(zip(canonical["Symbol"], canonical["Market"]))
+    data["CanonicalFreshCrossEligible"] = pd.Series(
+        list(zip(data["Symbol"], data["Market"])),
+        index=data.index,
+    ).isin(canonical_keys)
+    data["EligibleForBuyQueue"] = (
+        data["EligibleForBuyQueue"]
+        & data["CanonicalFreshCrossEligible"]
+    )
+    data["EligibleForWatchQueue"] = (
+        data["EligibleForWatchQueue"]
+        & data["CanonicalFreshCrossEligible"]
+    )
 
     buy_queue = data[data["EligibleForBuyQueue"]].copy()
     watch_queue = data[data["EligibleForWatchQueue"]].copy()
