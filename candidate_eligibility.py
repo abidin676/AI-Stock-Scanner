@@ -461,6 +461,7 @@ def apply_eligibility_policy(
         result.fresh_cross_reason
         for result in results
     ]
+    data["CrossAgeSource"] = "days_since_bullish_ema_cross"
     data["EligibilityReasons"] = data["BlockingReasons"]
     data["BuyQueueEligible"] = data["EligibleForBuyQueue"]
     data["WatchQueueEligible"] = data["EligibleForWatchQueue"]

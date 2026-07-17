@@ -133,6 +133,9 @@ DISPLAY_COLUMNS = [
     "StrategySignal",
     "StrategySetup",
     "StrategyScore",
+    "LatestPriceDate",
+    "CrossDate",
+    "DaysSinceEMA9CrossEMA20",
     "BaseDays",
     "BaseTightnessPct",
     "HighLowRange10",
@@ -204,6 +207,9 @@ OPPORTUNITY_DISPLAY_COLUMNS = [
     "StrategyMode",
     "StrategySignal",
     "StrategyScore",
+    "LatestPriceDate",
+    "CrossDate",
+    "DaysSinceEMA9CrossEMA20",
     "Price",
     "RSI",
     "RVOL",
@@ -2429,8 +2435,6 @@ def ema_check_context(row):
     fresh_cross = evaluate_fresh_cross_policy(row)
     ema9 = row_number_or_none(row, "EMA9", "ema9")
     ema20 = row_number_or_none(row, "EMA20", "ema20")
-    previous_ema9 = row_number_or_none(row, "PreviousEMA9", "PrevEMA9")
-    previous_ema20 = row_number_or_none(row, "PreviousEMA20", "PrevEMA20")
     days_since_cross = fresh_cross.age
 
     above_field = row_value(row, "EMA9AboveEMA20", default=None)
@@ -2446,29 +2450,14 @@ def ema_check_context(row):
 
     ema9_above_ema20 = fresh_cross.ema9_above_ema20
 
-    cross_today_field = row_value(row, "EMABullishCrossToday", default=None)
-    if cross_today_field is not None:
-        bullish_cross_today = row_bool(row, "EMABullishCrossToday")
-    elif (
-        ema9 is not None
-        and ema20 is not None
-        and previous_ema9 is not None
-        and previous_ema20 is not None
-    ):
-        bullish_cross_today = (
-            ema9 > ema20
-            and previous_ema9 <= previous_ema20
-        )
-    else:
-        bullish_cross_today = days_since_cross == 0
+    bullish_cross_today = (
+        days_since_cross == 0
+        and fresh_cross.ema9_above_ema20
+    )
 
     cross_age_is_valid = (
         days_since_cross is not None
         and days_since_cross >= 0
-    )
-    cross_within_5_days = (
-        cross_age_is_valid
-        and days_since_cross <= 5
     )
     cross_within_fresh_days = (
         cross_age_is_valid
@@ -2477,18 +2466,19 @@ def ema_check_context(row):
     is_fresh_ema9_cross = fresh_cross.eligible
 
     return {
-        "LatestPriceDate": row_text(row, "LatestPriceDate"),
+        "LatestPriceDate": fresh_cross.latest_price_date,
+        "CrossDate": fresh_cross.cross_date,
         "EMA9": ema9,
         "EMA20": ema20,
         "EMA9AboveEMA20": bool(ema9_above_ema20),
         "EMABullishCrossToday": bool(bullish_cross_today),
-        "EMACrossWithin5Days": bool(cross_within_5_days),
         "EMACrossWithinFreshDays": bool(cross_within_fresh_days),
         "IsFreshEMA9Cross": bool(is_fresh_ema9_cross),
         "DaysSinceEMACross": days_since_cross,
         "FreshCrossStatus": fresh_cross.status,
         "FreshCrossStatusLabel": fresh_cross.status_label,
         "FreshCrossReason": fresh_cross.reason,
+        "CrossAgeSource": "days_since_bullish_ema_cross",
         "RVOL": row_number_or_none(row, "RVOL", "rvol"),
         "ChecklistEMAFieldUsed": field_used,
     }
@@ -3439,20 +3429,24 @@ def render_opportunity_details(row, market_quality_score):
             f"{safe_number(row.get('FreshnessScore', 0)):.1f}",
         )
 
-        cols = st.columns(4)
+        cols = st.columns(5)
         cols[0].metric(
             "Latest Price Date",
             ema_debug.get("LatestPriceDate") or "N/A",
         )
         cols[1].metric(
+            "Cross Date",
+            ema_debug.get("CrossDate") or "N/A",
+        )
+        cols[2].metric(
             "EMA9",
             f"{safe_number(ema_debug.get('EMA9')):.4f}",
         )
-        cols[2].metric(
+        cols[3].metric(
             "EMA20",
             f"{safe_number(ema_debug.get('EMA20')):.4f}",
         )
-        cols[3].metric(
+        cols[4].metric(
             "EMA9 > EMA20",
             "Yes" if ema_debug.get("EMA9AboveEMA20") else "No",
         )
@@ -3463,8 +3457,8 @@ def render_opportunity_details(row, market_quality_score):
             "Yes" if ema_debug.get("EMABullishCrossToday") else "No",
         )
         cols[1].metric(
-            "Cross <= 5D",
-            "Yes" if ema_debug.get("EMACrossWithin5Days") else "No",
+            f"Fresh <= {MAX_FRESH_CROSS_DAYS}D",
+            "Yes" if ema_debug.get("IsFreshEMA9Cross") else "No",
         )
         days_since_cross = ema_debug.get("DaysSinceEMACross")
         cols[2].metric(
@@ -3476,8 +3470,8 @@ def render_opportunity_details(row, market_quality_score):
             ),
         )
         cols[3].metric(
-            "Checklist EMA Field",
-            ema_debug.get("ChecklistEMAFieldUsed", "N/A"),
+            "Cross Age Source",
+            ema_debug.get("CrossAgeSource", "N/A"),
         )
 
     with debug:

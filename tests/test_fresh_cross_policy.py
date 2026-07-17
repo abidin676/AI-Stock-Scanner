@@ -21,6 +21,8 @@ def policy_row(**overrides):
         "EMA9": 11,
         "EMA20": 10,
         "DaysSinceEMA9CrossEMA20": 0,
+        "LatestPriceDate": "2026-07-17",
+        "CrossDate": "2026-07-17",
         "LifecycleState": "SEED",
         "StrategySignal": "SEED BUY",
         "RecommendedAction": "Review First",
@@ -52,6 +54,7 @@ def test_policy_accepts_only_configured_fresh_ages(cross_age):
     ("overrides", "status", "label"),
     [
         ({"DaysSinceEMA9CrossEMA20": 3}, "STALE_CROSS", "Cross เก่า"),
+        ({"DaysSinceEMA9CrossEMA20": 5}, "STALE_CROSS", "Cross เก่า"),
         ({"DaysSinceEMA9CrossEMA20": None}, "NO_CROSS", "ยังไม่ Cross"),
         (
             {
@@ -159,6 +162,23 @@ def test_apply_policy_keeps_stale_rows_for_show_all_diagnostics():
     assert not bool(data.iloc[0]["FreshCrossEligible"])
     assert data.iloc[0]["CrossAgeLabel"] == "10D"
     assert data.iloc[0]["FreshCrossStatusLabel"] == "Cross เก่า"
+
+
+def test_policy_never_falls_back_to_today_from_ema_above_or_legacy_alias():
+    result = evaluate_fresh_cross_policy(
+        policy_row(
+            DaysSinceEMA9CrossEMA20=None,
+            DaysSinceEMACross=0,
+            EMABullishCrossToday=True,
+            EMA9AboveEMA20=True,
+            CrossDate=None,
+        )
+    )
+
+    assert result.age is None
+    assert result.eligible is False
+    assert result.status == "NO_CROSS"
+    assert result.age_label == "-"
 
 
 def test_permanent_policy_default_is_two_trading_days():

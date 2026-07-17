@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 
 from candidate_eligibility import (
     evaluate_candidate_eligibility,
@@ -189,12 +190,13 @@ def test_missing_optional_fields_do_not_crash_and_do_not_enter_buy_queue():
     assert "EligibilityReasons" in normalized.columns
 
 
-def test_stale_cross_cannot_enter_buy_or_prepare_queue():
+@pytest.mark.parametrize("cross_age", [3, 5, 10])
+def test_stale_cross_cannot_enter_buy_prepare_or_watch_queue(cross_age):
     ranked = pd.DataFrame(
         [
             ranked_row(
                 Symbol="STALE.BK",
-                DaysSinceEMA9CrossEMA20=10,
+                DaysSinceEMA9CrossEMA20=cross_age,
                 AIConfidence=100,
                 PriorityScore=100,
                 SeedScore=100,

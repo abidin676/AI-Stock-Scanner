@@ -398,7 +398,7 @@ def test_fresh_cross_ages_zero_to_two_are_eligible(
     assert table.iloc[0]["Reason"] == reason
 
 
-@pytest.mark.parametrize("cross_age", [3, 10])
+@pytest.mark.parametrize("cross_age", [3, 5, 10])
 def test_cross_age_above_configured_limit_is_not_eligible(cross_age):
     candidates = prepare_daily_candidates(
         pd.DataFrame(
@@ -611,6 +611,9 @@ def test_ema_context_detects_bullish_cross_today():
         {
             "EMA9": 10.5,
             "EMA20": 10,
+            "DaysSinceEMA9CrossEMA20": 0,
+            "LatestPriceDate": "2026-07-17",
+            "CrossDate": "2026-07-17",
             "PreviousEMA9": 9.8,
             "PreviousEMA20": 10,
         }
@@ -619,6 +622,25 @@ def test_ema_context_detects_bullish_cross_today():
     assert context["EMA9AboveEMA20"] is True
     assert context["EMABullishCrossToday"] is True
     assert context["ChecklistEMAFieldUsed"] == "EMA9/EMA20"
+    assert context["CrossDate"] == "2026-07-17"
+
+
+def test_dashboard_never_infers_today_from_ema_above_without_cross_age():
+    context = ema_check_context(
+        {
+            "EMA9": 10.5,
+            "EMA20": 10,
+            "EMA9AboveEMA20": True,
+            "EMABullishCrossToday": True,
+            "PreviousEMA9": 9.8,
+            "PreviousEMA20": 10,
+        }
+    )
+
+    assert context["EMA9AboveEMA20"] is True
+    assert context["DaysSinceEMACross"] is None
+    assert context["EMABullishCrossToday"] is False
+    assert context["IsFreshEMA9Cross"] is False
 
 
 def test_ema_context_detects_cross_one_day_ago():

@@ -427,42 +427,29 @@ def process_symbol(
         [],
     )
     latest = df.iloc[-1]
-    previous = df.iloc[-2] if len(df) >= 2 else None
     latest_ema9 = _float_or_none(latest.get("ema9", None))
     latest_ema20 = _float_or_none(latest.get("ema20", None))
-    previous_ema9 = (
-        _float_or_none(previous.get("ema9", None))
-        if previous is not None
-        else None
-    )
-    previous_ema20 = (
-        _float_or_none(previous.get("ema20", None))
-        if previous is not None
-        else None
-    )
     ema9_above_ema20 = (
         latest_ema9 is not None
         and latest_ema20 is not None
         and latest_ema9 > latest_ema20
     )
-    ema_bullish_cross_today = (
-        ema9_above_ema20
-        and previous_ema9 is not None
-        and previous_ema20 is not None
-        and previous_ema9 <= previous_ema20
-    )
     days_since_ema_cross = _float_or_none(
         latest.get("days_since_ema9_cross_ema20", None)
     )
-    ema_cross_within_5_days = (
-        days_since_ema_cross is not None
-        and 0 <= days_since_ema_cross <= 5
+    ema_bullish_cross_today = (
+        days_since_ema_cross == 0
+        and ema9_above_ema20
     )
+    latest_price_date = _format_price_date(latest.get("date", ""))
+    cross_date = _format_price_date(latest.get("ema9_cross_date", ""))
     fresh_cross = evaluate_fresh_cross_policy(
         {
             "EMA9": latest_ema9,
             "EMA20": latest_ema20,
             "DaysSinceEMA9CrossEMA20": days_since_ema_cross,
+            "LatestPriceDate": latest_price_date,
+            "CrossDate": cross_date,
         }
     )
     ema_cross_within_fresh_days = (
@@ -508,10 +495,7 @@ def process_symbol(
                 "DaysSinceEMA20SlopeTurnPositive",
                 None,
             ),
-            "DaysSinceEMA9CrossEMA20": strategy_result.get(
-                "DaysSinceEMA9CrossEMA20",
-                None,
-            ),
+            "DaysSinceEMA9CrossEMA20": days_since_ema_cross,
             "DaysSinceBreakout": strategy_result.get(
                 "DaysSinceBreakout",
                 None,
@@ -600,19 +584,20 @@ def process_symbol(
             "SeedReasons": strategy_result.get("SeedReasons", ""),
             "ATR": latest.get("atr", 0),
             "DistanceEMA20Pct": latest.get("distance_ema20", 0),
-            "LatestPriceDate": _format_price_date(latest.get("date", "")),
+            "LatestPriceDate": latest_price_date,
+            "CrossDate": cross_date,
             "EMA9": latest.get("ema9", 0),
             "EMA20": latest.get("ema20", 0),
             "EMA50": latest.get("ema50", 0),
             "EMA200": latest.get("ema200", 0),
             "EMA9AboveEMA20": ema9_above_ema20,
             "EMABullishCrossToday": ema_bullish_cross_today,
-            "EMACrossWithin5Days": ema_cross_within_5_days,
             "EMACrossWithinFreshDays": ema_cross_within_fresh_days,
             "IsFreshEMA9Cross": is_fresh_ema9_cross,
             "FreshCrossStatus": fresh_cross.status,
             "FreshCrossStatusLabel": fresh_cross.status_label,
             "FreshCrossReason": fresh_cross.reason,
+            "CrossAgeSource": "days_since_bullish_ema_cross",
             "DaysSinceEMACross": days_since_ema_cross,
             "Low90": latest.get("low90", 0),
             "High20": latest.get("high20", 0),

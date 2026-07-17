@@ -9,7 +9,7 @@ from ta.momentum import RSIIndicator
 
 
 INDICATOR_CACHE_DIR = Path("data") / "indicator_cache"
-INDICATOR_VERSION = "v3_fresh_ema_cross_20260717"
+INDICATOR_VERSION = "v4_bullish_ema_cross_event_20260717"
 INDICATOR_COLUMNS = [
     "indicator_version",
     "ema9",
@@ -62,7 +62,9 @@ INDICATOR_COLUMNS = [
     "atr_percentile_60",
     "atr_compression_score",
     "days_since_ema20_slope_turn_positive",
+    "ema9_bullish_cross",
     "days_since_ema9_cross_ema20",
+    "ema9_cross_date",
     "days_since_breakout",
     "high20",
     "break20",
@@ -97,6 +99,7 @@ BOOLEAN_COLUMNS = [
     "pivot_breakout",
     "wide_range_bullish",
     "momentum_established",
+    "ema9_bullish_cross",
 ]
 
 
@@ -134,6 +137,16 @@ def days_since_event(condition):
         index=condition.index,
         dtype="float64",
     )
+
+
+def days_since_bullish_ema_cross(ema9, ema20):
+
+    bullish_cross = (
+        (ema9 > ema20)
+        &
+        (ema9.shift(1) <= ema20.shift(1))
+    )
+    return days_since_event(bullish_cross)
 
 
 def rolling_last_percentile(series, window=60):
@@ -208,23 +221,85 @@ def has_indicator_columns(df):
     )
 
 
+def has_current_indicator_version(df):
+
+    if df.empty or "indicator_version" not in df.columns:
+        return False
+
+    versions = (
+        df["indicator_version"]
+        .dropna()
+        .astype(str)
+        .str.strip()
+        .unique()
+    )
+    return len(versions) == 1 and versions[0] == INDICATOR_VERSION
+
+
+def indicator_cache_matches_source(cached, source):
+
+    if cached.empty or source.empty or len(cached) != len(source):
+        return False
+
+    if not has_current_indicator_version(cached):
+        return False
+
+    if "date" in cached.columns and "date" in source.columns:
+        cached_dates = pd.to_datetime(
+            cached["date"],
+            errors="coerce",
+        ).reset_index(drop=True)
+        source_dates = pd.to_datetime(
+            source["date"],
+            errors="coerce",
+        ).reset_index(drop=True)
+        if not cached_dates.equals(source_dates):
+            return False
+
+    for column in ["open", "high", "low", "close", "volume"]:
+        if column not in cached.columns or column not in source.columns:
+            continue
+        cached_values = pd.to_numeric(
+            cached[column],
+            errors="coerce",
+        ).reset_index(drop=True)
+        source_values = pd.to_numeric(
+            source[column],
+            errors="coerce",
+        ).reset_index(drop=True)
+        values_match = (
+            (cached_values == source_values)
+            | (cached_values.isna() & source_values.isna())
+        )
+        if not bool(values_match.all()):
+            return False
+
+    return True
+
+
 def normalize_indicator_cache(df):
 
     if df.empty:
         return df
 
-    if "date" in df.columns:
-        df["date"] = pd.to_datetime(
-            df["date"],
-            errors="coerce",
-        )
+    for column in ["date", "ema9_cross_date"]:
+        if column in df.columns:
+            df[column] = pd.to_datetime(
+                df[column],
+                errors="coerce",
+            )
 
     for column in (
         "symbol",
         "market",
+        "indicator_version",
     ):
         if column in df.columns:
-            df[column] = df[column].astype(str).str.upper()
+            df[column] = df[column].astype(str)
+
+    for column in ("symbol", "market"):
+        if column in df.columns:
+            df[column] = df[column].str.upper()
 
     for column in BOOLEAN_COLUMNS:
         if column not in df.columns:
@@ -249,8 +324,10 @@ def normalize_indicator_cache(df):
     for column in df.columns:
         if column in (
             "date",
+            "ema9_cross_date",
             "symbol",
             "market",
+            "indicator_version",
         ) or column in BOOLEAN_COLUMNS:
             continue
 
@@ -269,7 +346,7 @@ def load_indicator_cache(path):
     except Exception:
         return pd.DataFrame()
 
-    if not has_indicator_columns(df):
+    if not has_indicator_columns(df) or not has_current_indicator_version(df):
         return pd.DataFrame()
 
     return normalize_indicator_cache(df)
@@ -293,7 +370,7 @@ def add_indicators_cached(
     force_refresh=False,
 ):
 
-    if has_indicator_columns(df):
+    if has_indicator_columns(df) and has_current_indicator_version(df):
         return df, True
 
     path = indicator_cache_path(
@@ -306,7 +383,7 @@ def add_indicators_cached(
     if not force_refresh and is_indicator_cache_fresh(path):
         cached = load_indicator_cache(path)
 
-        if not cached.empty:
+        if indicator_cache_matches_source(cached, df):
             return cached, True
 
     df = add_indicators(df)
@@ -515,14 +592,23 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["days_since_ema20_slope_turn_positive"] = days_since_event(
         ema20_slope_turn_positive
     )
-    ema9_cross_ema20 = (
-        (df["ema9"] > df["ema20"])
-        &
-        (df["ema9"].shift(1) <= df["ema20"].shift(1))
+    df["days_since_ema9_cross_ema20"] = days_since_bullish_ema_cross(
+        df["ema9"],
+        df["ema20"],
     )
-    df["days_since_ema9_cross_ema20"] = days_since_event(
-        ema9_cross_ema20
+    df["ema9_bullish_cross"] = (
+        df["days_since_ema9_cross_ema20"] == 0
     )
+    if "date" in df.columns:
+        price_dates = pd.to_datetime(
+            df["date"],
+            errors="coerce",
+        )
+        df["ema9_cross_date"] = price_dates.where(
+            df["ema9_bullish_cross"]
+        ).ffill()
+    else:
+        df["ema9_cross_date"] = pd.NaT
     # EMA Alignment
     df["ema_alignment"] = (
         (

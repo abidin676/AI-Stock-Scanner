@@ -16,6 +16,9 @@ FRESH_CROSS_COLUMNS = [
     "FreshCrossStatus",
     "FreshCrossStatusLabel",
     "FreshCrossReason",
+    "CrossAgeSource",
+    "LatestPriceDate",
+    "CrossDate",
 ]
 
 
@@ -28,6 +31,8 @@ class FreshCrossResult:
     status: str
     status_label: str
     reason: str
+    latest_price_date: str
+    cross_date: str
 
 
 def _value(row: Mapping[str, Any], *names: str) -> Any:
@@ -52,6 +57,35 @@ def _number_or_none(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _cross_age_value(row: Mapping[str, Any]) -> Any:
+    for name in [
+        "DaysSinceEMA9CrossEMA20",
+        "days_since_ema9_cross_ema20",
+    ]:
+        if name in row:
+            return row.get(name)
+    return None
+
+
+def _date_text(value: Any) -> str:
+    if isinstance(value, str) and not value.strip():
+        return ""
+
+    try:
+        if value is None or pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        parsed = pd.to_datetime(value)
+        if pd.isna(parsed):
+            return ""
+        return parsed.strftime("%Y-%m-%d")
+    except (TypeError, ValueError):
+        return str(value).strip()
 
 
 def _bool(value: Any) -> bool:
@@ -94,13 +128,12 @@ def evaluate_fresh_cross_policy(
     row = candidate.to_dict() if isinstance(candidate, pd.Series) else candidate
     ema9 = _number_or_none(_value(row, "EMA9", "ema9"))
     ema20 = _number_or_none(_value(row, "EMA20", "ema20"))
-    age_number = _number_or_none(
-        _value(
-            row,
-            "DaysSinceEMA9CrossEMA20",
-            "DaysSinceEMACross",
-            "days_since_ema9_cross_ema20",
-        )
+    age_number = _number_or_none(_cross_age_value(row))
+    latest_price_date = _date_text(
+        _value(row, "LatestPriceDate", "date")
+    )
+    cross_date = _date_text(
+        _value(row, "CrossDate", "ema9_cross_date")
     )
 
     if ema9 is not None and ema20 is not None:
@@ -147,6 +180,8 @@ def evaluate_fresh_cross_policy(
         status=status,
         status_label=status_label,
         reason=reason,
+        latest_price_date=latest_price_date,
+        cross_date=cross_date,
     )
 
 
@@ -175,4 +210,10 @@ def apply_fresh_cross_policy(dataframe: pd.DataFrame | None) -> pd.DataFrame:
         for result in results
     ]
     data["FreshCrossReason"] = [result.reason for result in results]
+    data["CrossAgeSource"] = "days_since_bullish_ema_cross"
+    data["LatestPriceDate"] = [
+        result.latest_price_date
+        for result in results
+    ]
+    data["CrossDate"] = [result.cross_date for result in results]
     return data

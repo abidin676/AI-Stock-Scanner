@@ -26,6 +26,8 @@ SEED_ALERT_COLUMNS = [
     "Action",
     "CrossAge",
     "CrossStatus",
+    "CrossDate",
+    "LatestPriceDate",
     "SeedScore",
     "PatternName",
     "FreshnessScore",
@@ -434,6 +436,11 @@ def seed_alert_message(row, action, reason):
         row.get("FreshCrossStatusLabel", "Fresh Cross"),
         "Fresh Cross",
     )
+    cross_date = _safe_text(row.get("CrossDate", "-"), "-")
+    latest_price_date = _safe_text(
+        row.get("LatestPriceDate", "-"),
+        "-",
+    )
 
     return "\n".join(
         [
@@ -441,6 +448,8 @@ def seed_alert_message(row, action, reason):
             f"Symbol: {symbol}",
             f"Action: {action}",
             f"Cross: {cross_age} ({cross_status})",
+            f"Cross date: {cross_date}",
+            f"Latest price date: {latest_price_date}",
             f"Seed: {seed_score}",
             f"Pattern: {pattern}",
             f"Fresh: {freshness}",
@@ -476,6 +485,10 @@ def seed_alert_row(row, scan_date, source_file=PRIORITY_RESULTS_FILE):
         "CrossAge": _safe_text(row.get("CrossAgeLabel", "-"), "-"),
         "CrossStatus": _safe_text(
             row.get("FreshCrossStatusLabel", ""),
+        ),
+        "CrossDate": _safe_text(row.get("CrossDate", "")),
+        "LatestPriceDate": _safe_text(
+            row.get("LatestPriceDate", ""),
         ),
         "SeedScore": _format_score(row.get("SeedScore", 0)),
         "PatternName": _safe_text(row.get("PatternName", "")),
