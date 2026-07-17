@@ -1,6 +1,6 @@
 # River Alpha Scanner
 
-River Alpha Scanner is a local stock research platform for finding high-quality trading setups across SET and US markets. It combines market data, indicators, modular strategy engines, portfolio tracking, watchlists, alerts, and a Strategy Lab for backtesting ideas.
+River Alpha Scanner is a Fresh EMA9-over-EMA20 Cross Scanner for SET and US markets. Its main recommendations only include symbols where EMA9 is currently above EMA20 and the bullish cross occurred within the latest 0–2 daily trading bars. It combines market data, indicators, modular strategy engines, portfolio tracking, watchlists, alerts, and a Strategy Lab for backtesting ideas.
 
 This project is designed as a decision-support tool, not an automated trading bot or financial advice.
 
@@ -21,6 +21,15 @@ This project is designed as a decision-support tool, not an automated trading bo
 - Portfolio Manager with SET/USA fee support and THB summary
 - Strategy Lab with backtest trades, equity curve, monthly returns, benchmark comparison, and run history
 - CSV/XLSX outputs for dashboard compatibility
+
+## Permanent Fresh Cross Policy
+
+- `MAX_FRESH_CROSS_DAYS = 2` is the standard policy limit.
+- Cross age is counted from daily trading bars, not calendar days.
+- Today's Picks, Top 5 SET/USA, BUY, PREPARE, alert candidates, and Buy Queue always require a Fresh EMA9-over-EMA20 Cross aged 0, 1, or 2 trading days.
+- AI Score, Volume, and RVOL cannot override the Fresh Cross gate.
+- Scanner Results can display all symbols through `Show all`, but non-fresh rows are diagnostic only and are labeled `Cross เก่า`, `ยังไม่ Cross`, or `EMA9 ต่ำกว่า EMA20`.
+- No dashboard toggle promotes a non-fresh row into a main recommendation.
 
 ## Screenshot
 

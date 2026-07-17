@@ -1,16 +1,29 @@
 import pandas as pd
+import pytest
+
+from config import MAX_FRESH_CROSS_DAYS
 
 from views.scanner import (
     AI_ADVANCED_COLUMNS,
     AI_SIMPLE_COLUMNS,
+    DEFAULT_SHOW_ADVANCED_DETAILS,
     ai_action_label,
     ai_empty_state_message,
     ai_summary_counts,
+    build_simple_dashboard_sections,
     build_buy_checklist,
     build_ai_advanced_table,
     build_ai_simple_table,
     buy_checklist_summary,
+    ema_check_context,
     next_action_card,
+    prepare_daily_candidates,
+    simple_candidate_table,
+    simple_buy_now_table,
+    simple_pick_table,
+    simple_near_buy_table,
+    simple_watch_table,
+    strategy_mode_cli_arg,
     summarize_reason,
 )
 
@@ -57,6 +70,7 @@ def test_simple_table_has_only_five_user_facing_columns():
     assert simple.iloc[0].to_dict() == {
         "Symbol": "BUY.BK",
         "Action": "🟢 ซื้อได้",
+        "Cross Age": "-",
         "AI Score": 70,
         "Risk": "LOW",
         "Reason": "พร้อมเข้าซื้อ",
@@ -181,10 +195,325 @@ def test_original_dataframe_is_not_mutated_by_dashboard_helpers():
     pd.testing.assert_frame_equal(original, before_data)
 
 
+def simple_ready_row(symbol, decision="WATCH", **overrides):
+    row = ai_row(
+        symbol,
+        decision,
+        Price=10,
+        AIConfidence=80,
+        StrategySignal="BUY",
+        StrategySetup="Early Reversal",
+        EMA9=10.2,
+        EMA20=10,
+        EMA9AboveEMA20=True,
+        DaysSinceEMA9CrossEMA20=0,
+        DaysSinceEMA20SlopeTurnPositive=3,
+        RSI=55,
+        RVOL=1.6,
+        RR=2.0,
+        RiskPct=3,
+        ExpansionScore=10,
+        AIRiskLevel="LOW",
+    )
+    row.update(overrides)
+    return row
+
+
+def test_simple_dashboard_buy_now_requires_buy_and_risk_passed():
+    ai = pd.DataFrame(
+        [
+            simple_ready_row("BUY.BK", "BUY"),
+            simple_ready_row("WAIT.BK", "BUY"),
+        ]
+    )
+    risk = pd.DataFrame(
+        [
+            {"Symbol": "BUY.BK", "Market": "SET", "RiskApproved": True},
+            {"Symbol": "WAIT.BK", "Market": "SET", "RiskApproved": False},
+        ]
+    )
+
+    sections = build_simple_dashboard_sections(ai, risk)
+    table = simple_buy_now_table(sections["buy_now"])
+
+    assert table.columns.tolist() == [
+        "Symbol",
+        "Market",
+        "Cross Age",
+        "Price",
+        "AI Score",
+        "Reason",
+    ]
+    assert table["Symbol"].tolist() == ["BUY.BK"]
+
+
+def test_simple_dashboard_near_buy_uses_one_missing_condition():
+    ai = pd.DataFrame(
+        [
+            simple_ready_row(
+                "KPNREIT.BK",
+                "WATCH",
+                RVOL=1.39,
+            )
+        ]
+    )
+
+    sections = build_simple_dashboard_sections(ai)
+    table = simple_near_buy_table(sections["near_buy"])
+
+    assert table.iloc[0]["Symbol"] == "KPNREIT.BK"
+    assert table.iloc[0]["Missing Condition"] == "RVOL ≥ 1.5x"
+    assert table.iloc[0]["Next Action"] == "รอ Volume ยืนยัน"
+
+
+def test_simple_dashboard_watch_section_limits_to_ten():
+    ai = pd.DataFrame(
+        [
+            simple_ready_row(
+                f"W{i:02d}.BK",
+                "WATCH",
+                RVOL=0.5,
+                RSI=80,
+                AIConfidence=100 - i,
+            )
+            for i in range(15)
+        ]
+    )
+
+    sections = build_simple_dashboard_sections(ai)
+    table = simple_watch_table(sections["watch"])
+
+    assert len(table) == 10
+    assert table["Symbol"].tolist() == [f"W{i:02d}.BK" for i in range(10)]
+
+
+def test_simple_dashboard_deduplicates_symbol_market_across_sections():
+    ai = pd.DataFrame(
+        [
+            simple_ready_row("DUP.BK", "WATCH", RVOL=1.0),
+            simple_ready_row("DUP.BK", "BUY"),
+            simple_ready_row("ONLYWATCH.BK", "WATCH", RVOL=0.5),
+        ]
+    )
+    risk = pd.DataFrame(
+        [
+            {"Symbol": "DUP.BK", "Market": "SET", "RiskApproved": True},
+        ]
+    )
+
+    sections = build_simple_dashboard_sections(ai, risk)
+    combined = pd.concat(
+        [
+            sections["buy_now"],
+            sections["near_buy"],
+            sections["watch"],
+        ],
+        ignore_index=True,
+    )
+
+    assert combined["Symbol"].tolist().count("DUP.BK") == 1
+    assert simple_buy_now_table(sections["buy_now"])["Symbol"].tolist() == ["DUP.BK"]
+
+
+def test_daily_picks_show_top_five_per_market_with_simple_columns():
+    rows = [
+        simple_ready_row(f"SET{i}.BK", "WATCH", Market="SET", AIConfidence=90 - i)
+        for i in range(7)
+    ] + [
+        simple_ready_row(f"USA{i}", "WATCH", Market="USA", AIConfidence=80 - i)
+        for i in range(6)
+    ]
+    candidates = prepare_daily_candidates(pd.DataFrame(rows))
+
+    set_table = simple_pick_table(candidates, "SET")
+    usa_table = simple_pick_table(candidates, "USA")
+
+    assert set_table.columns.tolist() == [
+        "Symbol",
+        "Action",
+        "Cross Age",
+        "Score",
+        "Price",
+        "Reason",
+    ]
+    assert len(set_table) == 5
+    assert len(usa_table) == 5
+    assert set_table["Symbol"].tolist() == [f"SET{i}.BK" for i in range(5)]
+    assert usa_table["Symbol"].tolist() == [f"USA{i}" for i in range(5)]
+
+
+def test_scanner_results_table_uses_only_simple_columns():
+    candidates = prepare_daily_candidates(
+        pd.DataFrame(
+            [
+                simple_ready_row("SIMPLE.BK", "WATCH", RSI=55, RVOL=1.2),
+            ]
+        )
+    )
+
+    table = simple_candidate_table(candidates)
+
+    assert table.columns.tolist() == [
+        "Symbol",
+        "Market",
+        "Action",
+        "Cross Age",
+        "Cross Status",
+        "Score",
+        "Price",
+        "RSI",
+        "RVOL",
+        "Reason",
+    ]
+    assert table.iloc[0]["Action"] == "ใกล้ซื้อ"
+
+
+@pytest.mark.parametrize(
+    ("cross_age", "label", "reason"),
+    [
+        (0, "Today", "EMA9 เพิ่งตัด EMA20 วันนี้"),
+        (1, "1D", "EMA9 ตัด EMA20 เมื่อ 1 วันก่อน"),
+        (2, "2D", "EMA9 ตัด EMA20 เมื่อ 2 วันก่อน"),
+    ],
+)
+def test_fresh_cross_ages_zero_to_two_are_eligible(
+    cross_age,
+    label,
+    reason,
+):
+    candidates = prepare_daily_candidates(
+        pd.DataFrame(
+            [
+                simple_ready_row(
+                    f"AGE{cross_age}.BK",
+                    DaysSinceEMA9CrossEMA20=cross_age,
+                )
+            ]
+        )
+    )
+
+    assert bool(candidates.iloc[0]["_IsFreshEMACross"]) is True
+    table = simple_candidate_table(candidates)
+    assert table.iloc[0]["Cross Age"] == label
+    assert table.iloc[0]["Reason"] == reason
+
+
+@pytest.mark.parametrize("cross_age", [3, 10])
+def test_cross_age_above_configured_limit_is_not_eligible(cross_age):
+    candidates = prepare_daily_candidates(
+        pd.DataFrame(
+            [
+                simple_ready_row(
+                    "STALE.BK",
+                    "BUY",
+                    DaysSinceEMA9CrossEMA20=cross_age,
+                    RiskApproved=True,
+                    RVOL=5,
+                )
+            ]
+        )
+    )
+
+    assert bool(candidates.iloc[0]["_IsFreshEMACross"]) is False
+    assert candidates.iloc[0]["_DisplayAction"] == "WATCH"
+    assert simple_pick_table(candidates, "SET").empty
+
+
+def test_ema9_below_ema20_is_not_eligible_even_with_recent_cross_age():
+    context = ema_check_context(
+        simple_ready_row(
+            "BELOW.BK",
+            EMA9=9.9,
+            EMA20=10,
+            EMA9AboveEMA20=True,
+            DaysSinceEMA9CrossEMA20=1,
+        )
+    )
+
+    assert context["EMA9AboveEMA20"] is False
+    assert context["IsFreshEMA9Cross"] is False
+
+
+def test_missing_cross_history_is_not_eligible():
+    context = ema_check_context(
+        simple_ready_row(
+            "NOHISTORY.BK",
+            DaysSinceEMA9CrossEMA20=None,
+        )
+    )
+
+    assert context["DaysSinceEMACross"] is None
+    assert context["IsFreshEMA9Cross"] is False
+
+
+def test_kpnreit_stale_cross_is_not_pick_or_prepare_but_remains_in_all_results():
+    row = simple_ready_row(
+        "KPNREIT.BK",
+        "WATCH",
+        DaysSinceEMA9CrossEMA20=10,
+        RVOL=1.39,
+    )
+    candidates = prepare_daily_candidates(pd.DataFrame([row]))
+    sections = build_simple_dashboard_sections(pd.DataFrame([row]))
+
+    assert simple_pick_table(candidates, "SET").empty
+    assert sections["buy_now"].empty
+    assert sections["near_buy"].empty
+    assert candidates.iloc[0]["_DisplayAction"] == "WATCH"
+    assert simple_candidate_table(candidates).iloc[0]["Symbol"] == "KPNREIT.BK"
+    assert simple_candidate_table(candidates).iloc[0]["Cross Age"] == "10D"
+    assert simple_candidate_table(candidates).iloc[0]["Cross Status"] == "Cross เก่า"
+
+
+def test_candidates_sort_by_cross_age_then_ai_score():
+    rows = [
+        simple_ready_row("AGE2.BK", AIConfidence=99, DaysSinceEMA9CrossEMA20=2),
+        simple_ready_row("AGE0LOW.BK", AIConfidence=70, DaysSinceEMA9CrossEMA20=0),
+        simple_ready_row("AGE1.BK", AIConfidence=100, DaysSinceEMA9CrossEMA20=1),
+        simple_ready_row("AGE0HIGH.BK", AIConfidence=90, DaysSinceEMA9CrossEMA20=0),
+        simple_ready_row("AGE3.BK", AIConfidence=100, DaysSinceEMA9CrossEMA20=3),
+    ]
+
+    candidates = prepare_daily_candidates(pd.DataFrame(rows))
+
+    assert candidates["Symbol"].tolist() == [
+        "AGE0HIGH.BK",
+        "AGE0LOW.BK",
+        "AGE1.BK",
+        "AGE2.BK",
+        "AGE3.BK",
+    ]
+    assert simple_pick_table(candidates, "SET", limit=10)["Symbol"].tolist() == [
+        "AGE0HIGH.BK",
+        "AGE0LOW.BK",
+        "AGE1.BK",
+        "AGE2.BK",
+    ]
+
+
+def test_fresh_cross_limit_is_configured_to_two_trading_bars():
+    assert MAX_FRESH_CROSS_DAYS == 2
+
+
+def test_simple_dashboard_empty_buy_state():
+    ai = pd.DataFrame([simple_ready_row("WATCH.BK", "WATCH")])
+
+    sections = build_simple_dashboard_sections(ai)
+    table = simple_buy_now_table(sections["buy_now"])
+
+    assert table.empty
+
+
+def test_advanced_details_default_hidden():
+    assert DEFAULT_SHOW_ADVANCED_DETAILS is False
+
+
 def checklist_row(**overrides):
     row = {
         "EMA9": 11,
         "EMA20": 10,
+        "DaysSinceEMA9CrossEMA20": 0,
+        "EMABullishCrossToday": True,
         "EMA50": 12,
         "EMA200": 9,
         "EMA20Improving": True,
@@ -237,6 +566,8 @@ def test_buy_checklist_all_false():
         checklist_row(
             EMA9=9,
             EMA20=10,
+            DaysSinceEMA9CrossEMA20=10,
+            EMABullishCrossToday=False,
             EMA50=8,
             EMA200=9,
             EMA20Improving=False,
@@ -275,6 +606,99 @@ def test_buy_checklist_mixed_shows_missing_volume_and_breakout():
     assert "Breakout / Pivot ยืนยัน" in failed
 
 
+def test_ema_context_detects_bullish_cross_today():
+    context = ema_check_context(
+        {
+            "EMA9": 10.5,
+            "EMA20": 10,
+            "PreviousEMA9": 9.8,
+            "PreviousEMA20": 10,
+        }
+    )
+
+    assert context["EMA9AboveEMA20"] is True
+    assert context["EMABullishCrossToday"] is True
+    assert context["ChecklistEMAFieldUsed"] == "EMA9/EMA20"
+
+
+def test_ema_context_detects_cross_one_day_ago():
+    context = ema_check_context(
+        {
+            "EMA9": 10.5,
+            "EMA20": 10,
+            "DaysSinceEMA9CrossEMA20": 1,
+        }
+    )
+
+    assert context["EMA9AboveEMA20"] is True
+    assert context["IsFreshEMA9Cross"] is True
+
+
+def test_ema_context_rejects_cross_three_days_ago_still_above():
+    checklist = build_buy_checklist(
+        checklist_row(
+            DaysSinceEMA9CrossEMA20=3,
+            EMABullishCrossToday=False,
+        )
+    )
+    by_key = {item["key"]: item["passed"] for item in checklist}
+
+    assert by_key["ema9_above_ema20"] is True
+    assert by_key["ema_cross_fresh"] is False
+
+
+def test_ema_context_crossed_before_but_now_below():
+    checklist = build_buy_checklist(
+        checklist_row(
+            EMA9=9.9,
+            EMA20=10,
+            DaysSinceEMA9CrossEMA20=2,
+            EMABullishCrossToday=False,
+        )
+    )
+    by_key = {item["key"]: item["passed"] for item in checklist}
+
+    assert by_key["ema9_above_ema20"] is False
+    assert by_key["ema_cross_fresh"] is False
+
+
+def test_checklist_does_not_fail_current_ema_above_when_cross_history_missing():
+    checklist = build_buy_checklist(
+        {
+            "EMA9": 10.4,
+            "EMA20": 10,
+            "EMA20Improving": True,
+            "RSI": 55,
+            "RVOL": 1.2,
+            "ExpansionScore": 10,
+            "RiskApproved": True,
+            "RR": 2.5,
+            "RiskPct": 3,
+        }
+    )
+    by_key = {item["key"]: item["passed"] for item in checklist}
+    failed_labels = {item["label"] for item in checklist if not item["passed"]}
+
+    assert by_key["ema9_above_ema20"] is True
+    assert "EMA9 อยู่เหนือ EMA20" not in failed_labels
+    assert by_key["ema_cross_fresh"] is False
+
+
+def test_next_action_rejects_stale_cross_before_volume_confirmation():
+    action = next_action_card(
+        checklist_row(
+            AIDecision="WATCH",
+            EMA9=10.5,
+            EMA20=10,
+            RVOL=1.0,
+            DaysSinceEMA9CrossEMA20=10,
+            EMABullishCrossToday=False,
+        )
+    )
+
+    assert action["Message"] == "EMA9 Cross เกิน 2 วันทำการแล้ว"
+
+
 def test_buy_checklist_missing_columns_does_not_crash():
     checklist = build_buy_checklist({})
 
@@ -285,7 +709,7 @@ def test_buy_checklist_missing_columns_does_not_crash():
 def test_next_action_buy_prepare_watch_exit():
     assert next_action_card(checklist_row()) == {
         "Priority": "BUY",
-        "Message": "พร้อมเข้าซื้อ",
+        "Message": "ผ่านเงื่อนไข เตรียมประเมิน Entry / Stop / Target",
     }
 
     prepare = next_action_card(
@@ -295,17 +719,18 @@ def test_next_action_buy_prepare_watch_exit():
         )
     )
     assert prepare["Priority"] == "PREPARE"
-    assert prepare["Message"] == "รอ Volume มากกว่า 1.5x"
+    assert prepare["Message"] == "รอ Volume ยืนยัน โดย RVOL >= 1.5x"
 
     watch = next_action_card(
         checklist_row(
             AIDecision="WATCH",
             EMA9=9,
             EMA20=10,
+            EMABullishCrossToday=False,
         )
     )
     assert watch["Priority"] == "WATCH"
-    assert watch["Message"] == "รอ EMA9 ตัด EMA20"
+    assert watch["Message"] == "รอ EMA9 ตัดขึ้นเหนือ EMA20"
 
     exit_action = next_action_card(
         checklist_row(
@@ -341,3 +766,12 @@ def test_new_ui_helpers_do_not_mutate_original_dataframe():
     summarize_reason(row)
 
     pd.testing.assert_frame_equal(original, before)
+
+
+def test_strategy_mode_cli_arg_maps_display_labels():
+    assert strategy_mode_cli_arg("Standard") == "standard"
+    assert strategy_mode_cli_arg("Early") == "early"
+    assert strategy_mode_cli_arg("Pure Early") == "pure_early"
+    assert strategy_mode_cli_arg("pure_early") == "pure_early"
+    assert strategy_mode_cli_arg("Breakout") == "breakout"
+    assert strategy_mode_cli_arg("Momentum") == "momentum"

@@ -11,6 +11,7 @@ import pandas as pd
 from providers.thai import get_symbols
 from candidate_eligibility import apply_eligibility_policy
 from data import get_histories, is_price_cache_fresh, price_cache_path
+from fresh_cross_policy import evaluate_fresh_cross_policy
 from indicators import add_indicators_cached
 from strategy import trend_start
 from strategy_modes import (
@@ -61,6 +62,7 @@ from scan_metadata import build_scan_metadata, save_scan_manifest, save_scan_met
 from config import (
     PERIOD,
     INTERVAL,
+    MAX_FRESH_CROSS_DAYS,
     MAX_WORKERS,
     OUTPUT_FOLDER,
     CSV_FILE,
@@ -345,6 +347,30 @@ def load_symbols(index, market):
     raise ValueError(f"Unknown market: {market}")
 
 
+def _float_or_none(value):
+
+    try:
+        if pd.isna(value):
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_price_date(value):
+
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        return pd.to_datetime(value).strftime("%Y-%m-%d")
+    except (TypeError, ValueError):
+        return str(value)
+
+
 def process_symbol(
     symbol,
     market,
@@ -401,6 +427,49 @@ def process_symbol(
         [],
     )
     latest = df.iloc[-1]
+    previous = df.iloc[-2] if len(df) >= 2 else None
+    latest_ema9 = _float_or_none(latest.get("ema9", None))
+    latest_ema20 = _float_or_none(latest.get("ema20", None))
+    previous_ema9 = (
+        _float_or_none(previous.get("ema9", None))
+        if previous is not None
+        else None
+    )
+    previous_ema20 = (
+        _float_or_none(previous.get("ema20", None))
+        if previous is not None
+        else None
+    )
+    ema9_above_ema20 = (
+        latest_ema9 is not None
+        and latest_ema20 is not None
+        and latest_ema9 > latest_ema20
+    )
+    ema_bullish_cross_today = (
+        ema9_above_ema20
+        and previous_ema9 is not None
+        and previous_ema20 is not None
+        and previous_ema9 <= previous_ema20
+    )
+    days_since_ema_cross = _float_or_none(
+        latest.get("days_since_ema9_cross_ema20", None)
+    )
+    ema_cross_within_5_days = (
+        days_since_ema_cross is not None
+        and 0 <= days_since_ema_cross <= 5
+    )
+    fresh_cross = evaluate_fresh_cross_policy(
+        {
+            "EMA9": latest_ema9,
+            "EMA20": latest_ema20,
+            "DaysSinceEMA9CrossEMA20": days_since_ema_cross,
+        }
+    )
+    ema_cross_within_fresh_days = (
+        fresh_cross.age is not None
+        and fresh_cross.age <= MAX_FRESH_CROSS_DAYS
+    )
+    is_fresh_ema9_cross = fresh_cross.eligible
 
     return {
         "symbol": symbol,
@@ -531,9 +600,20 @@ def process_symbol(
             "SeedReasons": strategy_result.get("SeedReasons", ""),
             "ATR": latest.get("atr", 0),
             "DistanceEMA20Pct": latest.get("distance_ema20", 0),
+            "LatestPriceDate": _format_price_date(latest.get("date", "")),
+            "EMA9": latest.get("ema9", 0),
             "EMA20": latest.get("ema20", 0),
             "EMA50": latest.get("ema50", 0),
             "EMA200": latest.get("ema200", 0),
+            "EMA9AboveEMA20": ema9_above_ema20,
+            "EMABullishCrossToday": ema_bullish_cross_today,
+            "EMACrossWithin5Days": ema_cross_within_5_days,
+            "EMACrossWithinFreshDays": ema_cross_within_fresh_days,
+            "IsFreshEMA9Cross": is_fresh_ema9_cross,
+            "FreshCrossStatus": fresh_cross.status,
+            "FreshCrossStatusLabel": fresh_cross.status_label,
+            "FreshCrossReason": fresh_cross.reason,
+            "DaysSinceEMACross": days_since_ema_cross,
             "Low90": latest.get("low90", 0),
             "High20": latest.get("high20", 0),
             "High55": latest.get("high55", 0),

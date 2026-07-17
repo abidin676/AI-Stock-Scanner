@@ -7,9 +7,11 @@ import json
 
 import pandas as pd
 
+from fresh_cross_policy import evaluate_fresh_cross_policy
+
 
 POLICY_CONFIG_FILE = Path("config") / "candidate_eligibility_config.json"
-DEFAULT_POLICY_VERSION = "decision_pipeline_phase_1"
+DEFAULT_POLICY_VERSION = "fresh_ema_cross_0_2_v1"
 VALID_MARKETS = {"SET", "USA"}
 EXTENDED_TERMS = {"EXTENDED", "MOMENTUM EXTENDED", "CHASING"}
 SKIP_TERMS = {"SKIP", "NO DATA", "NO_DATA", "AVOID"}
@@ -54,6 +56,11 @@ class EligibilityResult:
     warning_reasons: list[str]
     passed_gates: list[str]
     policy_version: str
+    fresh_cross_eligible: bool
+    fresh_cross_age: int | None
+    fresh_cross_status: str
+    fresh_cross_status_label: str
+    fresh_cross_reason: str
 
 
 def safe_float(value: Any, default: float = 0.0) -> float:
@@ -190,6 +197,7 @@ def evaluate_candidate_eligibility(
 ) -> EligibilityResult:
     cfg = normalize_config(config)
     row = candidate if isinstance(candidate, Mapping) else candidate.to_dict()
+    fresh_cross = evaluate_fresh_cross_policy(row)
     blocking: list[str] = []
     warnings: list[str] = []
     passed: list[str] = []
@@ -231,6 +239,13 @@ def evaluate_candidate_eligibility(
 
     if has_skip_signal(row):
         blocking.append("Scanner/lifecycle SKIP")
+
+    if fresh_cross.eligible:
+        passed.append("Fresh EMA9-over-EMA20 cross within 0-2 trading days")
+    else:
+        blocking.append(
+            f"Fresh EMA cross required: {fresh_cross.status_label}"
+        )
 
     buy_lifecycle_ok = (
         lifecycle in cfg.allowed_buy_lifecycle_states
@@ -322,6 +337,11 @@ def evaluate_candidate_eligibility(
         warning_reasons=warnings,
         passed_gates=passed,
         policy_version=cfg.policy_version,
+        fresh_cross_eligible=fresh_cross.eligible,
+        fresh_cross_age=fresh_cross.age,
+        fresh_cross_status=fresh_cross.status,
+        fresh_cross_status_label=fresh_cross.status_label,
+        fresh_cross_reason=fresh_cross.reason,
     )
 
 
@@ -413,6 +433,34 @@ def apply_eligibility_policy(
     data["WarningReasons"] = [list_text(result.warning_reasons) for result in results]
     data["PassedGates"] = [list_text(result.passed_gates) for result in results]
     data["EligibilityPolicyVersion"] = [result.policy_version for result in results]
+    data["FreshCrossEligible"] = [
+        result.fresh_cross_eligible
+        for result in results
+    ]
+    data["IsFreshEMA9Cross"] = data["FreshCrossEligible"]
+    data["FreshCrossAge"] = [result.fresh_cross_age for result in results]
+    data["CrossAgeLabel"] = [
+        "Today"
+        if result.fresh_cross_age == 0
+        else (
+            f"{result.fresh_cross_age}D"
+            if result.fresh_cross_age is not None
+            else "-"
+        )
+        for result in results
+    ]
+    data["FreshCrossStatus"] = [
+        result.fresh_cross_status
+        for result in results
+    ]
+    data["FreshCrossStatusLabel"] = [
+        result.fresh_cross_status_label
+        for result in results
+    ]
+    data["FreshCrossReason"] = [
+        result.fresh_cross_reason
+        for result in results
+    ]
     data["EligibilityReasons"] = data["BlockingReasons"]
     data["BuyQueueEligible"] = data["EligibleForBuyQueue"]
     data["WatchQueueEligible"] = data["EligibleForWatchQueue"]

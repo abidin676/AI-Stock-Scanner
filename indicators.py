@@ -9,7 +9,7 @@ from ta.momentum import RSIIndicator
 
 
 INDICATOR_CACHE_DIR = Path("data") / "indicator_cache"
-INDICATOR_VERSION = "v2_seed_expansion_20260709"
+INDICATOR_VERSION = "v3_fresh_ema_cross_20260717"
 INDICATOR_COLUMNS = [
     "indicator_version",
     "ema9",
@@ -516,9 +516,9 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
         ema20_slope_turn_positive
     )
     ema9_cross_ema20 = (
-        (df["ema9"] >= df["ema20"])
+        (df["ema9"] > df["ema20"])
         &
-        (df["ema9"].shift(1) < df["ema20"].shift(1))
+        (df["ema9"].shift(1) <= df["ema20"].shift(1))
     )
     df["days_since_ema9_cross_ema20"] = days_since_event(
         ema9_cross_ema20

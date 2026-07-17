@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from fresh_cross_policy import apply_fresh_cross_policy
 from notification.console_notifier import ConsoleNotifier
 from notification.line_notifier import LineNotifier
 from notification.telegram_notifier import TelegramNotifier
@@ -23,6 +24,8 @@ SEED_ALERT_COLUMNS = [
     "Market",
     "Signal",
     "Action",
+    "CrossAge",
+    "CrossStatus",
     "SeedScore",
     "PatternName",
     "FreshnessScore",
@@ -300,7 +303,7 @@ def valid_seed_candidates(priority_results):
     if priority_results.empty:
         return priority_results.copy()
 
-    data = priority_results.copy()
+    data = apply_fresh_cross_policy(priority_results)
 
     for column in [
         "Symbol",
@@ -316,7 +319,8 @@ def valid_seed_candidates(priority_results):
     signal = data["StrategySignal"].astype(str).str.upper()
     action = data["RecommendedAction"].astype(str).str.upper()
     valid = data[
-        (lifecycle == "SEED")
+        data["FreshCrossEligible"]
+        & (lifecycle == "SEED")
         & signal.str.contains("SEED", regex=False, na=False)
         & ~signal.str.contains(
             "MOMENTUM|EXTENDED|SKIP",
@@ -401,6 +405,10 @@ def seed_alert_reason(row):
     dry_days = _safe_int(row.get("DryVolumeDays", 0))
     parts = []
 
+    fresh_reason = _safe_text(row.get("FreshCrossReason", ""))
+    if fresh_reason:
+        parts.append(fresh_reason)
+
     if setup:
         parts.append(setup)
 
@@ -421,12 +429,18 @@ def seed_alert_message(row, action, reason):
     freshness = _format_score(row.get("FreshnessScore", 0))
     expansion = _format_score(row.get("ExpansionScore", 0))
     rr = _format_score(row.get("RR", 0), digits=1)
+    cross_age = _safe_text(row.get("CrossAgeLabel", "-"), "-")
+    cross_status = _safe_text(
+        row.get("FreshCrossStatusLabel", "Fresh Cross"),
+        "Fresh Cross",
+    )
 
     return "\n".join(
         [
             "🌱 River Alpha Seed Alert",
             f"Symbol: {symbol}",
             f"Action: {action}",
+            f"Cross: {cross_age} ({cross_status})",
             f"Seed: {seed_score}",
             f"Pattern: {pattern}",
             f"Fresh: {freshness}",
@@ -459,6 +473,10 @@ def seed_alert_row(row, scan_date, source_file=PRIORITY_RESULTS_FILE):
         "Market": market,
         "Signal": signal,
         "Action": action,
+        "CrossAge": _safe_text(row.get("CrossAgeLabel", "-"), "-"),
+        "CrossStatus": _safe_text(
+            row.get("FreshCrossStatusLabel", ""),
+        ),
         "SeedScore": _format_score(row.get("SeedScore", 0)),
         "PatternName": _safe_text(row.get("PatternName", "")),
         "FreshnessScore": _format_score(row.get("FreshnessScore", 0)),

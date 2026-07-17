@@ -1,6 +1,7 @@
 {
-  "policy_version": "decision_pipeline_phase_1",
+  "policy_version": "fresh_ema_cross_0_2_v1",
   "_description": {
+    "fresh_cross_policy": "BUY, PREPARE, Buy Queue, and alert candidates always require EMA9 above EMA20 with cross age 0-2 trading days. MAX_FRESH_CROSS_DAYS is defined in config.py.",
     "buy_min_priority_score": "Minimum PriorityScore for actionable BUY queue candidates.",
     "buy_min_rr": "Minimum risk/reward ratio for actionable BUY queue candidates.",
     "prepare_min_seed_score": "Minimum SeedScore for PREPARE/watchlist-stage candidates.",

@@ -8,8 +8,14 @@ import pandas as pd
 import streamlit as st
 
 from candidate_eligibility import split_candidate_queues
-from config import MAX_WORKERS
+from config import MAX_FRESH_CROSS_DAYS, MAX_WORKERS
 from data import PRICE_CACHE_DIR
+from fresh_cross_policy import (
+    apply_fresh_cross_policy,
+    cross_age_label as policy_cross_age_label,
+    evaluate_fresh_cross_policy,
+    fresh_cross_reason_for_age,
+)
 from market_quality import (
     calculate_market_quality,
     latest_market_quality_with_trend,
@@ -64,6 +70,16 @@ STRATEGY_MODE_OPTIONS = [
     "Breakout",
     "Momentum",
 ]
+STRATEGY_MODE_CLI_ARGS = {
+    "STANDARD": "standard",
+    "EARLY": "early",
+    "PURE EARLY": "pure_early",
+    "PURE_EARLY": "pure_early",
+    "PURE-EARLY": "pure_early",
+    "SEED": "pure_early",
+    "BREAKOUT": "breakout",
+    "MOMENTUM": "momentum",
+}
 SIGNAL_ORDER = {
     "BUY": 0,
     "WATCH": 1,
@@ -2289,9 +2305,11 @@ def render_reason_block(title, reasons):
 
 
 BUY_CHECKLIST_LABELS = {
-    "ema9_above_ema20": "EMA9 > EMA20",
+    "ema9_above_ema20": "EMA9 อยู่เหนือ EMA20",
+    "ema_cross_fresh": (
+        f"EMA9 เพิ่งตัดขึ้นภายใน {MAX_FRESH_CROSS_DAYS} วันทำการ"
+    ),
     "ema20_rising": "EMA20 กำลังขึ้น",
-    "ema50_above_ema200": "EMA50 > EMA200",
     "rsi_zone": "RSI อยู่ในโซน",
     "rvol_ready": "RVOL >= 1.5x",
     "breakout_ready": "Breakout / Pivot ยืนยัน",
@@ -2324,6 +2342,25 @@ def row_value(row, *names, default=None):
             return value
 
     return default
+
+
+def row_number_or_none(row, *names):
+
+    value = row_value(row, *names, default=None)
+
+    if value is None:
+        return None
+
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def row_text(row, *names):
@@ -2387,33 +2424,104 @@ def has_any_text(text, terms):
     )
 
 
+def ema_check_context(row):
+
+    fresh_cross = evaluate_fresh_cross_policy(row)
+    ema9 = row_number_or_none(row, "EMA9", "ema9")
+    ema20 = row_number_or_none(row, "EMA20", "ema20")
+    previous_ema9 = row_number_or_none(row, "PreviousEMA9", "PrevEMA9")
+    previous_ema20 = row_number_or_none(row, "PreviousEMA20", "PrevEMA20")
+    days_since_cross = fresh_cross.age
+
+    above_field = row_value(row, "EMA9AboveEMA20", default=None)
+    if ema9 is not None and ema20 is not None:
+        ema9_above_ema20 = ema9 > ema20
+        field_used = "EMA9/EMA20"
+    elif above_field is not None:
+        ema9_above_ema20 = row_bool(row, "EMA9AboveEMA20")
+        field_used = "EMA9AboveEMA20"
+    else:
+        ema9_above_ema20 = False
+        field_used = "unavailable"
+
+    ema9_above_ema20 = fresh_cross.ema9_above_ema20
+
+    cross_today_field = row_value(row, "EMABullishCrossToday", default=None)
+    if cross_today_field is not None:
+        bullish_cross_today = row_bool(row, "EMABullishCrossToday")
+    elif (
+        ema9 is not None
+        and ema20 is not None
+        and previous_ema9 is not None
+        and previous_ema20 is not None
+    ):
+        bullish_cross_today = (
+            ema9 > ema20
+            and previous_ema9 <= previous_ema20
+        )
+    else:
+        bullish_cross_today = days_since_cross == 0
+
+    cross_age_is_valid = (
+        days_since_cross is not None
+        and days_since_cross >= 0
+    )
+    cross_within_5_days = (
+        cross_age_is_valid
+        and days_since_cross <= 5
+    )
+    cross_within_fresh_days = (
+        cross_age_is_valid
+        and days_since_cross <= MAX_FRESH_CROSS_DAYS
+    )
+    is_fresh_ema9_cross = fresh_cross.eligible
+
+    return {
+        "LatestPriceDate": row_text(row, "LatestPriceDate"),
+        "EMA9": ema9,
+        "EMA20": ema20,
+        "EMA9AboveEMA20": bool(ema9_above_ema20),
+        "EMABullishCrossToday": bool(bullish_cross_today),
+        "EMACrossWithin5Days": bool(cross_within_5_days),
+        "EMACrossWithinFreshDays": bool(cross_within_fresh_days),
+        "IsFreshEMA9Cross": bool(is_fresh_ema9_cross),
+        "DaysSinceEMACross": days_since_cross,
+        "FreshCrossStatus": fresh_cross.status,
+        "FreshCrossStatusLabel": fresh_cross.status_label,
+        "FreshCrossReason": fresh_cross.reason,
+        "RVOL": row_number_or_none(row, "RVOL", "rvol"),
+        "ChecklistEMAFieldUsed": field_used,
+    }
+
+
+def checklist_debug_fields(row):
+
+    return ema_check_context(row)
+
+
+def format_cross_age(value):
+
+    return policy_cross_age_label(value)
+
+
+def fresh_cross_reason(value):
+
+    return fresh_cross_reason_for_age(value)
+
+
 def build_buy_checklist(row):
 
     text = combined_decision_text(row)
+    ema_context = ema_check_context(row)
 
-    ema9 = row_value(row, "EMA9", "ema9")
-    ema20 = row_value(row, "EMA20", "ema20")
-    ema50 = row_value(row, "EMA50", "ema50")
-    ema200 = row_value(row, "EMA200", "ema200")
     rsi = row_value(row, "RSI")
     rvol = row_value(row, "RVOL")
     expansion = row_value(row, "ExpansionScore")
     rr = row_value(row, "RR", "RiskRewardRatio")
     risk_pct = row_value(row, "RiskPct", "StopDistancePct")
 
-    ema9_above_ema20 = (
-        safe_number(ema9) > safe_number(ema20)
-        if ema9 is not None and ema20 is not None
-        else has_any_text(
-            text,
-            {
-                "EMA9 > EMA20",
-                "EMA9 ABOVE EMA20",
-                "EMA9 NEAR/ABOVE EMA20",
-                "EMA9 CROSSED ABOVE EMA20",
-            },
-        )
-    )
+    ema9_above_ema20 = ema_context["EMA9AboveEMA20"]
+    ema_cross_fresh = ema_context["IsFreshEMA9Cross"]
 
     ema20_rising = (
         row_bool(row, "EMA20Improving")
@@ -2425,18 +2533,6 @@ def build_buy_checklist(row):
                 "EMA20 IMPROVING",
                 "EMA20 TURNING UP",
                 "EMA20 SLOPE TURNED POSITIVE",
-            },
-        )
-    )
-
-    ema50_above_ema200 = (
-        safe_number(ema50) > safe_number(ema200)
-        if ema50 is not None and ema200 is not None
-        else has_any_text(
-            text,
-            {
-                "EMA50 > EMA200",
-                "EMA50 ABOVE EMA200",
             },
         )
     )
@@ -2525,8 +2621,8 @@ def build_buy_checklist(row):
 
     values = {
         "ema9_above_ema20": bool(ema9_above_ema20),
+        "ema_cross_fresh": bool(ema_cross_fresh),
         "ema20_rising": bool(ema20_rising),
-        "ema50_above_ema200": bool(ema50_above_ema200),
         "rsi_zone": bool(rsi_zone),
         "rvol_ready": bool(rvol_ready),
         "breakout_ready": bool(breakout_ready),
@@ -2619,6 +2715,7 @@ def next_action_message(row, checklist=None):
 
     checklist = checklist or build_buy_checklist(row)
     priority = next_action_priority(row)
+    ema_context = ema_check_context(row)
     by_key = {
         item["key"]: bool(item["passed"])
         for item in checklist
@@ -2630,22 +2727,40 @@ def next_action_message(row, checklist=None):
         return "ควรขาย"
 
     if priority == "BUY" and all(by_key.values()):
-        return "พร้อมเข้าซื้อ"
+        return "ผ่านเงื่อนไข เตรียมประเมิน Entry / Stop / Target"
 
     if not by_key.get("ema9_above_ema20", False):
-        return "รอ EMA9 ตัด EMA20"
+        return "รอ EMA9 ตัดขึ้นเหนือ EMA20"
+
+    if not by_key.get("ema_cross_fresh", False):
+        days_since_cross = ema_context.get("DaysSinceEMACross")
+        if days_since_cross is None:
+            return "ยังไม่มีประวัติ EMA9 ตัด EMA20"
+        return (
+            f"EMA9 Cross เกิน {MAX_FRESH_CROSS_DAYS} วันทำการแล้ว"
+        )
 
     if not by_key.get("rvol_ready", False):
-        return "รอ Volume มากกว่า 1.5x"
+        return "รอ Volume ยืนยัน โดย RVOL >= 1.5x"
+
+    days_since_cross = ema_context.get("DaysSinceEMACross")
+    expansion = safe_number(row_value(row, "ExpansionScore", default=0))
+
+    if (
+        days_since_cross is not None
+        and days_since_cross > MAX_FRESH_CROSS_DAYS
+        and expansion <= 60
+    ):
+        return "รอแท่งยืนยันหรือ breakout พร้อม volume"
 
     if not by_key.get("breakout_ready", False):
-        return "รอ Breakout เหนือ High ล่าสุด"
+        return "รอแท่งยืนยันหรือ breakout พร้อม volume"
 
     if not by_key.get("risk_passed", False):
         return "Risk ยังไม่ผ่าน"
 
     if priority == "BUY":
-        return "พร้อมเข้าซื้อ"
+        return "ผ่านเงื่อนไข เตรียมประเมิน Entry / Stop / Target"
 
     if priority == "PREPARE":
         return "เตรียมซื้อเมื่อสัญญาณยืนยัน"
@@ -3291,6 +3406,7 @@ def render_opportunity_details(row, market_quality_score):
         )
 
     with indicators:
+        ema_debug = checklist_debug_fields(row)
         cols = st.columns(4)
         cols[0].metric(
             "RSI",
@@ -3323,14 +3439,57 @@ def render_opportunity_details(row, market_quality_score):
             f"{safe_number(row.get('FreshnessScore', 0)):.1f}",
         )
 
+        cols = st.columns(4)
+        cols[0].metric(
+            "Latest Price Date",
+            ema_debug.get("LatestPriceDate") or "N/A",
+        )
+        cols[1].metric(
+            "EMA9",
+            f"{safe_number(ema_debug.get('EMA9')):.4f}",
+        )
+        cols[2].metric(
+            "EMA20",
+            f"{safe_number(ema_debug.get('EMA20')):.4f}",
+        )
+        cols[3].metric(
+            "EMA9 > EMA20",
+            "Yes" if ema_debug.get("EMA9AboveEMA20") else "No",
+        )
+
+        cols = st.columns(4)
+        cols[0].metric(
+            "Cross Today",
+            "Yes" if ema_debug.get("EMABullishCrossToday") else "No",
+        )
+        cols[1].metric(
+            "Cross <= 5D",
+            "Yes" if ema_debug.get("EMACrossWithin5Days") else "No",
+        )
+        days_since_cross = ema_debug.get("DaysSinceEMACross")
+        cols[2].metric(
+            "Days Since Cross",
+            (
+                f"{days_since_cross:.0f}"
+                if days_since_cross is not None
+                else "N/A"
+            ),
+        )
+        cols[3].metric(
+            "Checklist EMA Field",
+            ema_debug.get("ChecklistEMAFieldUsed", "N/A"),
+        )
+
     with debug:
+        debug_row = dict(row)
+        debug_row.update(checklist_debug_fields(row))
         debug_data = pd.DataFrame(
             [
                 {
                     "Field": key,
                     "Value": str(value),
                 }
-                for key, value in row.items()
+                for key, value in debug_row.items()
             ]
         )
         st.dataframe(
@@ -3471,7 +3630,7 @@ def valid_seed_opportunities(opportunities, market=None):
     if opportunities.empty:
         return opportunities.copy()
 
-    data = opportunities.copy()
+    data = apply_fresh_cross_policy(opportunities)
 
     for column in [
         "Market",
@@ -3500,7 +3659,8 @@ def valid_seed_opportunities(opportunities, market=None):
     signal = data["StrategySignal"].astype(str).str.upper()
     action = data["RecommendedAction"].astype(str).str.upper()
     mask = (
-        (lifecycle == "SEED")
+        data["FreshCrossEligible"]
+        & (lifecycle == "SEED")
         & ~signal.str.contains(
             "MOMENTUM|EXTENDED|SKIP",
             regex=True,
@@ -4366,10 +4526,14 @@ def render_buy_queue(opportunities):
     st.subheader("Buy Queue")
     st.caption("If you can buy only 5 today, review these first.")
 
-    preferred = opportunities[
-        opportunities.get(
+    fresh_opportunities = apply_fresh_cross_policy(opportunities)
+    fresh_opportunities = fresh_opportunities[
+        fresh_opportunities["FreshCrossEligible"]
+    ].copy()
+    preferred = fresh_opportunities[
+        fresh_opportunities.get(
             "PriorityAction",
-            pd.Series("", index=opportunities.index),
+            pd.Series("", index=fresh_opportunities.index),
         ).isin(
             [
                 "Review First",
@@ -4378,7 +4542,11 @@ def render_buy_queue(opportunities):
             ]
         )
     ].copy()
-    queue = preferred if not preferred.empty else opportunities.copy()
+    queue = (
+        preferred
+        if not preferred.empty
+        else fresh_opportunities.copy()
+    )
     rank_column = (
         "PriorityRank"
         if "PriorityRank" in queue.columns
@@ -4962,10 +5130,39 @@ AI_ADVANCED_COLUMNS = [
 AI_SIMPLE_COLUMNS = [
     "Symbol",
     "Action",
+    "Cross Age",
     "AI Score",
     "Risk",
     "Reason",
 ]
+
+SIMPLE_DASHBOARD_BUY_COLUMNS = [
+    "Symbol",
+    "Market",
+    "Cross Age",
+    "Price",
+    "AI Score",
+    "Reason",
+]
+
+SIMPLE_DASHBOARD_NEAR_BUY_COLUMNS = [
+    "Symbol",
+    "Market",
+    "Cross Age",
+    "Missing Condition",
+    "AI Score",
+    "Next Action",
+]
+
+SIMPLE_DASHBOARD_WATCH_COLUMNS = [
+    "Symbol",
+    "Market",
+    "Cross Age",
+    "Reason",
+    "AI Score",
+]
+
+DEFAULT_SHOW_ADVANCED_DETAILS = False
 
 
 def ai_action_key(value):
@@ -5147,6 +5344,12 @@ def build_ai_simple_table(df, show_all_watch=False):
         {
             "Symbol": data["Symbol"],
             "Action": data["AIDecision"].apply(ai_action_label),
+            "Cross Age": [
+                format_cross_age(
+                    ema_check_context(row).get("DaysSinceEMACross")
+                )
+                for row in data.to_dict(orient="records")
+            ],
             "AI Score": data["AIConfidence"],
             "Risk": data["AIRiskLevel"],
             "Reason": [
@@ -5167,6 +5370,1084 @@ def build_ai_advanced_table(df):
         if column not in data.columns:
             data[column] = ""
     return data[AI_ADVANCED_COLUMNS].copy()
+
+
+def simple_action_label(action):
+
+    action = ai_action_key(action)
+    if action == "BUY":
+        return "ซื้อได้"
+    if action in {"PREPARE", "NEAR BUY"}:
+        return "ใกล้ซื้อ"
+    if action == "WATCH":
+        return "เฝ้าดู"
+    if action == "EXIT":
+        return "ขาย"
+    return "ไม่สนใจ"
+
+
+def simple_action_order(action):
+
+    return {
+        "BUY": 1,
+        "PREPARE": 2,
+        "WATCH": 3,
+        "AVOID": 4,
+    }.get(
+        ai_action_key(action),
+        4,
+    )
+
+
+def simple_market_status_label(score):
+
+    score = safe_number(score)
+    if score >= 60:
+        return "แข็งแรง"
+    if score >= 40:
+        return "ปกติ"
+    return "อ่อนแอ"
+
+
+def simple_market_status_rows(quality):
+
+    data = quality.copy() if quality is not None else pd.DataFrame()
+    rows = []
+
+    for market in ["SET", "USA"]:
+        score = 0
+        if not data.empty and "Market" in data.columns:
+            hit = data[
+                data["Market"].astype(str).str.upper() == market
+            ]
+            if not hit.empty:
+                score = safe_number(hit.iloc[0].get("QualityScore", 0))
+        rows.append({
+            "Market": market,
+            "Status": simple_market_status_label(score),
+        })
+
+    return pd.DataFrame(rows)
+
+
+def scanner_market_status_from_quality(quality):
+
+    status = simple_market_status_rows(quality)
+    return {
+        row["Market"]: row["Status"]
+        for _, row in status.iterrows()
+    }
+
+
+def risk_passed_for_simple(row):
+
+    if row_bool(row, "RiskApproved"):
+        return True
+
+    if row_text(row, "AIRiskLevel").upper() == "HIGH":
+        return False
+
+    rr = row_number_or_none(row, "RR", "RiskRewardRatio")
+    risk_pct = row_number_or_none(row, "RiskPct", "StopDistancePct")
+
+    if rr is None or risk_pct is None:
+        return False
+
+    return rr >= 1.5 and risk_pct <= 8
+
+
+def risk_approved_for_buy_now(row):
+
+    if row_value(row, "RiskApproved", default=None) is not None:
+        return row_bool(row, "RiskApproved")
+
+    return risk_passed_for_simple(row)
+
+
+def simple_setup_valid(row):
+
+    action = ai_action_key(row_text(row, "AIDecision"))
+    signal = row_text(row, "StrategySignal", "Signal").upper()
+    lifecycle = row_text(row, "LifecycleState").upper()
+
+    if action in {"EXIT", "AVOID", "NO_ACTION", "NONE", "SKIP"}:
+        return False
+
+    blocked_terms = {
+        "SKIP",
+        "EXTENDED",
+        "NO DATA",
+    }
+
+    return not any(
+        term in signal or term in lifecycle
+        for term in blocked_terms
+    )
+
+
+def build_simple_readiness_checklist(row):
+
+    ema_context = ema_check_context(row)
+    days_since_ema20_turn = row_number_or_none(
+        row,
+        "DaysSinceEMA20SlopeTurnPositive",
+    )
+    rsi = row_number_or_none(row, "RSI")
+    rvol = row_number_or_none(row, "RVOL", "rvol")
+    expansion = row_number_or_none(row, "ExpansionScore")
+
+    ema20_ready = (
+        row_bool(row, "EMA20Improving")
+        or (
+            days_since_ema20_turn is not None
+            and days_since_ema20_turn >= 0
+            and days_since_ema20_turn <= 20
+        )
+    )
+
+    items = [
+        {
+            "key": "setup_valid",
+            "label": "Setup ใช้งานได้",
+            "missing": "Setup ยังไม่ยืนยัน",
+            "passed": simple_setup_valid(row),
+        },
+        {
+            "key": "ema9_above_ema20",
+            "label": "EMA9 อยู่เหนือ EMA20",
+            "missing": "รอ EMA9 ตัดขึ้นเหนือ EMA20",
+            "passed": ema_context["EMA9AboveEMA20"],
+        },
+        {
+            "key": "ema_cross_fresh",
+            "label": (
+                f"EMA9 Cross ไม่เกิน {MAX_FRESH_CROSS_DAYS} วันทำการ"
+            ),
+            "missing": (
+                f"EMA9 Cross ไม่เกิน {MAX_FRESH_CROSS_DAYS} วันทำการ"
+            ),
+            "passed": ema_context["IsFreshEMA9Cross"],
+        },
+        {
+            "key": "ema20_recovering",
+            "label": "EMA20 เริ่มฟื้น",
+            "missing": "รอ EMA20 ฟื้นตัว",
+            "passed": ema20_ready,
+        },
+        {
+            "key": "rsi_zone",
+            "label": "RSI อยู่ในโซน",
+            "missing": "รอ RSI กลับเข้าโซน",
+            "passed": rsi is not None and 45 <= rsi <= 65,
+        },
+        {
+            "key": "rvol_ready",
+            "label": "RVOL ≥ 1.5x",
+            "missing": "RVOL ≥ 1.5x",
+            "passed": rvol is not None and rvol >= 1.5,
+        },
+        {
+            "key": "risk_passed",
+            "label": "Risk ผ่าน",
+            "missing": "Risk ยังไม่ผ่าน",
+            "passed": risk_passed_for_simple(row),
+        },
+        {
+            "key": "expansion_quiet",
+            "label": "ยังไม่ไล่ราคา",
+            "missing": "ราคาเริ่มวิ่งแล้ว",
+            "passed": expansion is not None and expansion <= 60,
+        },
+        {
+            "key": "rr_ready",
+            "label": "RR เหมาะสม",
+            "missing": "Risk/Reward ยังไม่เหมาะ",
+            "passed": safe_number(row_value(row, "RR", "RiskRewardRatio", default=0)) >= 1.5,
+        },
+    ]
+
+    return [
+        {
+            **item,
+            "passed": bool(item["passed"]),
+        }
+        for item in items
+    ]
+
+
+def simple_checklist_status(row):
+
+    checklist = build_simple_readiness_checklist(row)
+    passed = sum(
+        1
+        for item in checklist
+        if item["passed"]
+    )
+    missing = [
+        item["missing"]
+        for item in checklist
+        if not item["passed"]
+    ]
+
+    return {
+        "passed": passed,
+        "total": len(checklist),
+        "missing": missing,
+        "checklist": checklist,
+    }
+
+
+def simple_next_action(row, status=None):
+
+    status = status or simple_checklist_status(row)
+    action = ai_action_key(row_text(row, "AIDecision"))
+    missing = status.get("missing", [])
+    ema_context = ema_check_context(row)
+
+    if action == "EXIT":
+        return "ควรขาย"
+
+    if not missing:
+        return "ผ่านเงื่อนไข เตรียมประเมิน Entry / Stop / Target"
+
+    if not ema_context["IsFreshEMA9Cross"]:
+        if not ema_context["EMA9AboveEMA20"]:
+            return "รอ EMA9 ตัดขึ้นเหนือ EMA20"
+        if ema_context["DaysSinceEMACross"] is None:
+            return "ยังไม่มีประวัติ EMA9 ตัด EMA20"
+        return f"EMA9 Cross เกิน {MAX_FRESH_CROSS_DAYS} วันทำการแล้ว"
+
+    if "RVOL ≥ 1.5x" in missing:
+        return "รอ Volume ยืนยัน"
+
+    if "รอ EMA9 ตัดขึ้นเหนือ EMA20" in missing:
+        return "รอ EMA9 ตัดขึ้นเหนือ EMA20"
+
+    if "Risk ยังไม่ผ่าน" in missing:
+        return "รอ Risk ผ่าน"
+
+    return missing[0]
+
+
+def daily_action_for_row(row):
+
+    action = ai_action_key(row_text(row, "AIDecision"))
+    status = simple_checklist_status(row)
+    is_fresh_cross = ema_check_context(row)["IsFreshEMA9Cross"]
+
+    if not is_fresh_cross:
+        if action in {"BUY", "PREPARE", "WATCH", "HOLD"}:
+            return "WATCH"
+        return "AVOID"
+
+    if action == "BUY" and risk_approved_for_buy_now(row):
+        return "BUY"
+
+    if (
+        action in {"BUY", "PREPARE", "WATCH"}
+        and status["passed"] == status["total"] - 1
+    ):
+        return "PREPARE"
+
+    if action in {"BUY", "PREPARE", "WATCH", "HOLD"}:
+        return "WATCH"
+
+    return "AVOID"
+
+
+def merge_risk_approval(ai_decisions, risk_proposals=None):
+
+    data = normalize_ai_decision_frame(ai_decisions)
+
+    if risk_proposals is None or risk_proposals.empty:
+        return data
+
+    risk = normalize_order_proposals_frame(risk_proposals)
+    merge_columns = [
+        column
+        for column in [
+            "Symbol",
+            "Market",
+            "RiskApproved",
+            "ProposalStatus",
+            "RejectReason",
+        ]
+        if column in risk.columns
+    ]
+
+    if "Symbol" not in merge_columns or "Market" not in merge_columns:
+        return data
+
+    risk = risk[merge_columns].drop_duplicates(
+        subset=[
+            "Symbol",
+            "Market",
+        ],
+        keep="last",
+    )
+    merged = data.merge(
+        risk,
+        on=[
+            "Symbol",
+            "Market",
+        ],
+        how="left",
+        suffixes=(
+            "",
+            "_Risk",
+        ),
+    )
+
+    if "RiskApproved_Risk" in merged.columns:
+        merged["RiskApproved"] = merged["RiskApproved_Risk"].fillna(
+            merged.get("RiskApproved", False)
+        )
+        merged = merged.drop(
+            columns=["RiskApproved_Risk"],
+            errors="ignore",
+        )
+
+    return merged
+
+
+def build_simple_dashboard_sections(ai_decisions, risk_proposals=None):
+
+    enriched = prepare_daily_candidates(
+        ai_decisions,
+        risk_proposals,
+    )
+
+    if enriched.empty:
+        empty = enriched.copy()
+        return {
+            "all": empty,
+            "buy_now": empty,
+            "near_buy": empty,
+            "watch": empty,
+        }
+
+    decisions = enriched["AIDecision"].astype(str).str.upper()
+    buy_now_risk_passed = enriched.apply(
+        risk_approved_for_buy_now,
+        axis=1,
+    )
+
+    buy_now = enriched[
+        (decisions == "BUY")
+        & buy_now_risk_passed
+        & enriched["_IsFreshEMACross"]
+    ].copy()
+    buy_keys = set(
+        zip(
+            buy_now["Symbol"],
+            buy_now["Market"],
+        )
+    )
+
+    near_buy = enriched[
+        ~pd.Series(
+            list(zip(enriched["Symbol"], enriched["Market"])),
+            index=enriched.index,
+        ).isin(buy_keys)
+        & decisions.isin(
+            [
+                "BUY",
+                "PREPARE",
+                "WATCH",
+            ]
+        )
+        & enriched["_IsFreshEMACross"]
+        & (
+            enriched["_PassedCount"]
+            == enriched["_TotalCount"] - 1
+        )
+    ].copy()
+    near_buy_keys = set(
+        zip(
+            near_buy["Symbol"],
+            near_buy["Market"],
+        )
+    )
+    excluded_keys = buy_keys | near_buy_keys
+
+    watch = enriched[
+        ~pd.Series(
+            list(zip(enriched["Symbol"], enriched["Market"])),
+            index=enriched.index,
+        ).isin(excluded_keys)
+        & (decisions == "WATCH")
+    ].head(10).copy()
+
+    return {
+        "all": enriched,
+        "buy_now": buy_now,
+        "near_buy": near_buy,
+        "watch": watch,
+    }
+
+
+def prepare_daily_candidates(ai_decisions, risk_proposals=None):
+
+    data = merge_risk_approval(
+        ai_decisions,
+        risk_proposals,
+    )
+
+    if data.empty:
+        return data
+
+    rows = []
+    for _, row in data.iterrows():
+        record = row.to_dict()
+        ema_context = ema_check_context(record)
+        cross_age = ema_context["DaysSinceEMACross"]
+        is_fresh_cross = ema_context["IsFreshEMA9Cross"]
+        record["_CrossAge"] = cross_age
+        record["_CrossAgeLabel"] = format_cross_age(cross_age)
+        record["_CrossAgeSort"] = (
+            cross_age
+            if cross_age is not None and cross_age >= 0
+            else float("inf")
+        )
+        record["_IsFreshEMACross"] = is_fresh_cross
+        record["_FreshCrossStatusLabel"] = ema_context[
+            "FreshCrossStatusLabel"
+        ]
+        record["_FreshCrossOrder"] = 0 if is_fresh_cross else 1
+        status = simple_checklist_status(record)
+        action = daily_action_for_row(record)
+        record["_DisplayAction"] = action
+        record["_ActionLabel"] = simple_action_label(action)
+        record["_ActionOrder"] = simple_action_order(action)
+        record["_PassedCount"] = status["passed"]
+        record["_TotalCount"] = status["total"]
+        record["_MissingConditions"] = " · ".join(status["missing"])
+        record["_PrimaryMissingCondition"] = (
+            status["missing"][0]
+            if status["missing"]
+            else ""
+        )
+        record["_NextAction"] = simple_next_action(record, status)
+        record["_SimpleReason"] = (
+            fresh_cross_reason(cross_age)
+            if is_fresh_cross
+            else simple_next_action(record, status)
+        )
+        rows.append(record)
+
+    candidates = pd.DataFrame(rows)
+    candidates = candidates.sort_values(
+        [
+            "_FreshCrossOrder",
+            "_CrossAgeSort",
+            "AIConfidence",
+            "_ActionOrder",
+            "PriorityScore",
+        ],
+        ascending=[
+            True,
+            True,
+            False,
+            True,
+            False,
+        ],
+    )
+
+    return candidates.drop_duplicates(
+        subset=[
+            "Symbol",
+            "Market",
+        ],
+        keep="first",
+    ).reset_index(drop=True)
+
+
+def prepare_scanner_daily_candidates(df):
+
+    data = prepare_data(df)
+    rows = []
+
+    for _, row in data.iterrows():
+        source = row.to_dict()
+        ema_context = ema_check_context(source)
+        cross_age = ema_context["DaysSinceEMACross"]
+        is_fresh_cross = ema_context["IsFreshEMA9Cross"]
+        signal_group = row_text(row, "_signal_group").upper()
+        if signal_group == "BUY":
+            action = "BUY"
+        elif signal_group in {"WATCH", "EARLY"}:
+            action = "WATCH"
+        else:
+            action = "AVOID"
+
+        if not is_fresh_cross and action in {"BUY", "WATCH"}:
+            action = "WATCH"
+
+        rows.append({
+            "Symbol": row.get("Symbol", ""),
+            "Market": row.get("Market", ""),
+            "Price": safe_number(row.get("Price", 0)),
+            "RSI": safe_number(row.get("RSI", 0)),
+            "RVOL": safe_number(row.get("RVOL", 0)),
+            "StrategySetup": row.get("StrategySetup", row.get("Setup", "")),
+            "Score": safe_number(row.get("StrategyScore", row.get("Score", 0))),
+            "AIConfidence": safe_number(row.get("StrategyScore", row.get("Score", 0))),
+            "AIDecision": action,
+            "EMA9": row.get("EMA9", None),
+            "EMA20": row.get("EMA20", None),
+            "EMA9AboveEMA20": ema_context["EMA9AboveEMA20"],
+            "DaysSinceEMA9CrossEMA20": cross_age,
+            "_DisplayAction": action,
+            "_ActionLabel": simple_action_label(action),
+            "_ActionOrder": simple_action_order(action),
+            "_SimpleReason": (
+                fresh_cross_reason(cross_age)
+                if is_fresh_cross
+                else (
+                    "รอ EMA9 ตัดขึ้นเหนือ EMA20"
+                    if not ema_context["EMA9AboveEMA20"]
+                    else (
+                        "ยังไม่มีประวัติ EMA9 ตัด EMA20"
+                        if cross_age is None
+                        else (
+                            f"EMA9 Cross เกิน {MAX_FRESH_CROSS_DAYS} "
+                            "วันทำการแล้ว"
+                        )
+                    )
+                )
+            ),
+            "_CrossAge": cross_age,
+            "_CrossAgeLabel": format_cross_age(cross_age),
+            "_CrossAgeSort": (
+                cross_age
+                if cross_age is not None and cross_age >= 0
+                else float("inf")
+            ),
+            "_IsFreshEMACross": is_fresh_cross,
+            "_FreshCrossStatusLabel": ema_context[
+                "FreshCrossStatusLabel"
+            ],
+            "_FreshCrossOrder": 0 if is_fresh_cross else 1,
+            "_PassedCount": 0,
+            "_TotalCount": 0,
+            "_MissingConditions": "",
+            "_PrimaryMissingCondition": "",
+            "_NextAction": "",
+        })
+
+    if not rows:
+        return pd.DataFrame()
+
+    return pd.DataFrame(rows).sort_values(
+        [
+            "_FreshCrossOrder",
+            "_CrossAgeSort",
+            "AIConfidence",
+            "_ActionOrder",
+        ],
+        ascending=[
+            True,
+            True,
+            False,
+            True,
+        ],
+    ).drop_duplicates(
+        subset=[
+            "Symbol",
+            "Market",
+        ],
+        keep="first",
+    ).reset_index(drop=True)
+
+
+def column_or_default(data, column, default=0):
+
+    if column in data.columns:
+        return data[column]
+
+    return pd.Series(
+        default,
+        index=data.index,
+    )
+
+
+def load_daily_candidates(df):
+
+    ai_decisions, _, ai_missing = load_ai_decisions_from_disk()
+    risk_proposals, _, risk_missing = load_order_proposals_from_disk()
+
+    if ai_missing or ai_decisions.empty:
+        return prepare_scanner_daily_candidates(df)
+
+    if risk_missing:
+        risk_proposals = None
+
+    return prepare_daily_candidates(
+        ai_decisions,
+        risk_proposals,
+    )
+
+
+def simple_candidate_table(data):
+
+    if data.empty:
+        return pd.DataFrame(
+            columns=[
+                "Symbol",
+                "Market",
+                "Action",
+                "Cross Age",
+                "Cross Status",
+                "Score",
+                "Price",
+                "RSI",
+                "RVOL",
+                "Reason",
+            ]
+        )
+
+    table = pd.DataFrame(
+        {
+            "Symbol": data["Symbol"],
+            "Market": data["Market"],
+            "Action": data["_ActionLabel"],
+            "Cross Age": column_or_default(data, "_CrossAgeLabel", "-"),
+            "Cross Status": column_or_default(
+                data,
+                "_FreshCrossStatusLabel",
+                "ยังไม่ Cross",
+            ),
+            "Score": data["AIConfidence"],
+            "Price": column_or_default(data, "Price", 0),
+            "RSI": column_or_default(data, "RSI", 0),
+            "RVOL": column_or_default(data, "RVOL", 0),
+            "Reason": data["_SimpleReason"],
+        }
+    )
+
+    return table[
+        [
+            "Symbol",
+            "Market",
+            "Action",
+            "Cross Age",
+            "Cross Status",
+            "Score",
+            "Price",
+            "RSI",
+            "RVOL",
+            "Reason",
+        ]
+    ]
+
+
+def simple_pick_table(candidates, market, limit=5):
+
+    if candidates.empty:
+        return pd.DataFrame(
+            columns=[
+                "Symbol",
+                "Action",
+                "Cross Age",
+                "Score",
+                "Price",
+                "Reason",
+            ]
+        )
+
+    data = candidates[
+        (candidates["Market"].astype(str).str.upper() == market)
+        & (candidates["_DisplayAction"] != "AVOID")
+        & candidates["_IsFreshEMACross"]
+    ].sort_values(
+        [
+            "_CrossAgeSort",
+            "AIConfidence",
+        ],
+        ascending=[
+            True,
+            False,
+        ],
+    ).head(limit)
+
+    if data.empty:
+        return pd.DataFrame(
+            columns=[
+                "Symbol",
+                "Action",
+                "Cross Age",
+                "Score",
+                "Price",
+                "Reason",
+            ]
+        )
+
+    table = pd.DataFrame(
+        {
+            "Symbol": data["Symbol"],
+            "Action": data["_ActionLabel"],
+            "Cross Age": column_or_default(data, "_CrossAgeLabel", "-"),
+            "Score": data["AIConfidence"],
+            "Price": column_or_default(data, "Price", 0),
+            "Reason": data["_SimpleReason"],
+        }
+    )
+
+    return table[
+        [
+            "Symbol",
+            "Action",
+            "Cross Age",
+            "Score",
+            "Price",
+            "Reason",
+        ]
+    ]
+
+
+def simple_buy_now_table(data):
+
+    if data.empty:
+        return pd.DataFrame(columns=SIMPLE_DASHBOARD_BUY_COLUMNS)
+
+    table = pd.DataFrame(
+        {
+            "Symbol": data["Symbol"],
+            "Market": data["Market"],
+            "Cross Age": column_or_default(data, "_CrossAgeLabel", "-"),
+            "Price": data.get("Price", 0),
+            "AI Score": data["AIConfidence"],
+            "Reason": data["_SimpleReason"],
+        }
+    )
+    return table[SIMPLE_DASHBOARD_BUY_COLUMNS]
+
+
+def simple_near_buy_table(data):
+
+    if data.empty:
+        return pd.DataFrame(columns=SIMPLE_DASHBOARD_NEAR_BUY_COLUMNS)
+
+    table = pd.DataFrame(
+        {
+            "Symbol": data["Symbol"],
+            "Market": data["Market"],
+            "Cross Age": column_or_default(data, "_CrossAgeLabel", "-"),
+            "Missing Condition": data["_PrimaryMissingCondition"],
+            "AI Score": data["AIConfidence"],
+            "Next Action": data["_NextAction"],
+        }
+    )
+    return table[SIMPLE_DASHBOARD_NEAR_BUY_COLUMNS]
+
+
+def simple_watch_table(data):
+
+    if data.empty:
+        return pd.DataFrame(columns=SIMPLE_DASHBOARD_WATCH_COLUMNS)
+
+    table = pd.DataFrame(
+        {
+            "Symbol": data["Symbol"],
+            "Market": data["Market"],
+            "Cross Age": column_or_default(data, "_CrossAgeLabel", "-"),
+            "Reason": data["_SimpleReason"],
+            "AI Score": data["AIConfidence"],
+        }
+    )
+    return table[SIMPLE_DASHBOARD_WATCH_COLUMNS]
+
+
+def render_clean_scanner_header(last_scan, metadata, current_strategy):
+
+    st.title("River Alpha Scanner")
+    cols = st.columns([1.6, 1.1, 0.9, 0.7, 0.8])
+    cols[0].metric(
+        "Last Scan Time",
+        str(last_scan or "N/A"),
+    )
+
+    current_mode = str(
+        (metadata or {}).get(
+            "ExecutedScanMode",
+            (metadata or {}).get("RequestedMode", "ALL"),
+        )
+        or "ALL"
+    )
+    scan_index = (
+        SCAN_MODE_OPTIONS.index(current_mode)
+        if current_mode in SCAN_MODE_OPTIONS
+        else SCAN_MODE_OPTIONS.index("ALL")
+    )
+    scan_mode = cols[1].selectbox(
+        "Scan Mode",
+        SCAN_MODE_OPTIONS,
+        index=scan_index,
+        key="scanner_header_scan_mode",
+    )
+
+    cols[2].metric(
+        "Current Mode",
+        current_mode,
+    )
+    run_clicked = cols[3].button(
+        "Run Scanner",
+        type="primary",
+        key="scanner_header_run",
+    )
+    force_clicked = cols[4].button(
+        "Force Refresh",
+        key="scanner_header_force",
+    )
+
+    notice = st.session_state.pop(
+        "scanner_run_notice",
+        "",
+    )
+    if notice:
+        st.success(notice)
+
+    if not run_clicked and not force_clicked:
+        return
+
+    with st.spinner("Running scanner..."):
+        result = run_scanner_from_dashboard(
+            force_refresh=force_clicked,
+            mode=scan_mode,
+            workers=int(MAX_WORKERS),
+            strategy_mode=current_strategy or "Standard",
+        )
+
+    if result.returncode == 0:
+        st.session_state["scanner_run_notice"] = "Scan complete"
+        st.rerun()
+
+    st.error("Scanner failed. Open Advanced Tools for details.")
+    st.session_state["scanner_last_error"] = (
+        (result.stdout or "")
+        + "\n"
+        + (result.stderr or "")
+    ).strip()
+
+
+def render_daily_market_summary(df, candidates, quality):
+
+    st.subheader("Market Summary")
+    statuses = scanner_market_status_from_quality(quality)
+    cols = st.columns(5)
+
+    for index, market in enumerate(["SET", "USA"]):
+        stocks = 0
+        if "Market" in df.columns:
+            stocks = int(
+                (
+                    df["Market"]
+                    .astype(str)
+                    .str.upper()
+                    == market
+                ).sum()
+            )
+        buy_count = 0
+        if not candidates.empty and "Market" in candidates.columns:
+            buy_count = int(
+                (
+                    (
+                        candidates["Market"]
+                        .astype(str)
+                        .str.upper()
+                        == market
+                    )
+                    & (candidates["_DisplayAction"] == "BUY")
+                ).sum()
+            )
+
+        cols[index * 2].metric(
+            f"{market} Stocks",
+            stocks,
+        )
+        cols[index * 2 + 1].metric(
+            f"{market} BUY",
+            buy_count,
+        )
+
+    cols[4].metric(
+        "Market Status",
+        f"SET {statuses.get('SET', 'N/A')} / USA {statuses.get('USA', 'N/A')}",
+    )
+
+
+def render_todays_picks_simple(candidates):
+
+    st.subheader("Today's Picks")
+    set_col, usa_col = st.columns(2)
+
+    with set_col:
+        st.markdown("**Top 5 SET**")
+        table = simple_pick_table(candidates, "SET")
+        if table.empty:
+            st.info("ไม่มีรายการ")
+        else:
+            st.dataframe(
+                table,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    with usa_col:
+        st.markdown("**Top 5 USA**")
+        table = simple_pick_table(candidates, "USA")
+        if table.empty:
+            st.info("ไม่มีรายการ")
+        else:
+            st.dataframe(
+                table,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+
+def render_scanner_results_simple(candidates):
+
+    st.subheader("Scanner Results")
+
+    show_all = st.checkbox(
+        "Show all",
+        value=False,
+        help=(
+            "แสดงหุ้นที่ EMA Cross เกินช่วง Fresh Cross, "
+            "EMA9 ต่ำกว่า EMA20 หรือไม่มีประวัติ Cross ด้วย"
+        ),
+        key="simple_scanner_show_all",
+    )
+
+    search = st.text_input(
+        "Search",
+        value="",
+        placeholder="AAPL, PTT, KPNREIT",
+        key="simple_scanner_search",
+    )
+    data = candidates.copy()
+
+    if not show_all and not data.empty:
+        data = data[data["_IsFreshEMACross"]].copy()
+
+    if search.strip() and not data.empty:
+        needles = [
+            item.strip().upper()
+            for item in search.split(",")
+            if item.strip()
+        ]
+        data = data[
+            data["Symbol"]
+            .astype(str)
+            .str.upper()
+            .apply(
+                lambda value: any(
+                    needle in value
+                    for needle in needles
+                )
+            )
+        ]
+
+    st.dataframe(
+        simple_candidate_table(data),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    return data
+
+
+def render_stock_detail_simple(candidates):
+
+    st.subheader("Stock Detail")
+
+    if candidates.empty:
+        st.info("ไม่มีหุ้นสำหรับแสดงรายละเอียด")
+        return
+
+    detail_source = candidates[
+        candidates["_DisplayAction"] != "AVOID"
+    ].copy()
+    if detail_source.empty:
+        detail_source = candidates.head(50).copy()
+
+    labels = [
+        (
+            f"{row['Symbol']} | {row['Market']} | "
+            f"{row['_ActionLabel']}"
+        )
+        for _, row in detail_source.iterrows()
+    ]
+    selected = st.selectbox(
+        "Select Stock",
+        labels,
+        key="daily_stock_detail_select",
+    )
+    row = detail_source.iloc[labels.index(selected)]
+    missing = [
+        item.strip()
+        for item in str(row.get("_MissingConditions", "")).split("·")
+        if item.strip()
+    ]
+    setup = str(row.get("StrategySetup", row.get("Setup", "")))
+    entry = first_existing_number(
+        row,
+        [
+            "EntryPrice",
+            "Entry",
+            "Price",
+        ],
+    )
+    stop = first_existing_number(
+        row,
+        [
+            "StopLoss",
+            "StopPrice",
+            "Stop Loss",
+            "SL",
+        ],
+    )
+    target = first_existing_number(
+        row,
+        [
+            "Target",
+            "TargetPrice",
+            "TakeProfit",
+            "TP",
+        ],
+    )
+
+    cols = st.columns(5)
+    cols[0].metric("Symbol", row.get("Symbol", ""))
+    cols[1].metric("Action", row.get("_ActionLabel", ""))
+    cols[2].metric("Score", f"{safe_number(row.get('AIConfidence', 0)):.1f}")
+    cols[3].metric("Setup", setup)
+    cols[4].metric("Current Price", f"{safe_number(row.get('Price', 0)):.2f}")
+
+    cols = st.columns(3)
+    cols[0].metric("Entry", f"{entry:.2f}" if entry else "N/A")
+    cols[1].metric("Stop Loss", f"{stop:.2f}" if stop else "N/A")
+    cols[2].metric("Target", f"{target:.2f}" if target else "N/A")
+
+    st.markdown("**Why not buy yet**")
+    st.write(" · ".join(missing) if missing else "ผ่านครบ")
+
+    st.markdown("**Next Action**")
+    st.info(str(row.get("_NextAction", "")) or "เฝ้าดูต่อ")
+
+
+def render_daily_scanner_dashboard(df, quality):
+
+    candidates = load_daily_candidates(df)
+    render_daily_market_summary(
+        df,
+        candidates,
+        quality,
+    )
+    render_todays_picks_simple(candidates)
+    filtered = render_scanner_results_simple(candidates)
+    render_stock_detail_simple(filtered)
 
 
 def render_ai_decision_center():
@@ -6399,6 +7680,18 @@ def render_add_to_watchlist(df):
     st.success(f"Added {row['Symbol']} to Watchlist")
 
 
+def strategy_mode_cli_arg(strategy_mode):
+
+    key = str(strategy_mode or "Standard").strip().upper()
+    return STRATEGY_MODE_CLI_ARGS.get(
+        key,
+        key.lower().replace(
+            " ",
+            "_",
+        ),
+    )
+
+
 def run_scanner_from_dashboard(force_refresh, mode, workers, strategy_mode):
 
     command = [
@@ -6409,7 +7702,7 @@ def run_scanner_from_dashboard(force_refresh, mode, workers, strategy_mode):
         "--workers",
         str(workers),
         "--strategy-mode",
-        strategy_mode.lower(),
+        strategy_mode_cli_arg(strategy_mode),
     ]
 
     if force_refresh:
@@ -6477,6 +7770,9 @@ def render_scanner_actions():
         st.error(
             f"Scanner failed with exit code {result.returncode}."
         )
+        st.warning(
+            "Existing dashboard data below may still be from the previous successful scan."
+        )
 
     if output:
         with st.expander("Scanner Output"):
@@ -6488,127 +7784,85 @@ def render_scanner_actions():
 
 def scanner_page():
 
-    st.title("River Alpha Scanner")
-    render_scanner_actions()
-
-    if not RESULT_CSV_FILE.exists():
-        st.warning("scanner_results.csv not found")
-
     df, result_path = load_scanner_results_from_disk()
+    scan_metadata = load_scan_metadata()
 
     if result_path is None or df.empty:
+        render_clean_scanner_header(
+            "N/A",
+            scan_metadata,
+            "Standard",
+        )
         st.warning("scanner_results.csv or scanner_results.xlsx not found")
-        st.info("Run: python scanner.py or use Force Refresh")
+        st.info("กด Run Scanner เพื่อเริ่มสแกน")
         return
 
     df = prepare_data(df)
     opportunity_df, opportunity_path, opportunity_fallback = (
         load_opportunity_results_from_disk(df)
     )
-    scan_metadata = load_scan_metadata()
-
     last_scan = scan_metadata.get("ScanCompletedAt") or result_file_display_time(result_path)
+    current_strategy = current_strategy_mode(df)
 
-    st.caption(f"Last Scan: {last_scan}")
-    st.caption(f"Strategy Mode: {current_strategy_mode(df)}")
+    render_clean_scanner_header(
+        last_scan,
+        scan_metadata,
+        current_strategy,
+    )
     quality = load_quality_for_dashboard(
         df,
         last_scan,
     )
 
-    render_scanner_status(
+    render_daily_scanner_dashboard(
         df,
-        result_path,
-        last_scan,
-        scan_metadata,
-    )
-    render_debug_info(
-        df,
-        result_path,
-        scan_metadata,
-    )
-    render_pipeline_health(
-        df,
-        opportunity_df,
-        scan_metadata,
-    )
-
-    render_market_quality_cards(df, last_scan)
-
-    render_lifecycle_section(df)
-
-    st.sidebar.header("Filter")
-
-    market_filter = st.sidebar.selectbox(
-        "Market",
-        [
-            "ALL",
-            "SET",
-            "USA",
-        ],
-    )
-
-    symbol_search = st.sidebar.text_input(
-        "Symbol Search",
-        value="",
-        placeholder="AAPL, PTT, DUK",
-    )
-
-    signal_filter = st.sidebar.multiselect(
-        "Strategy Signal",
-        [
-            "ALL",
-            "SEED BUY",
-            "SEED WATCH",
-            "BUY",
-            "WATCH",
-            "EARLY",
-            "EXTENDED",
-            "SKIP",
-        ],
-        default=[
-            "ALL",
-        ],
-    )
-
-    lifecycle_filter = st.sidebar.multiselect(
-        "Lifecycle State",
-        LIFECYCLE_STATES,
-        default=[
-            "ALL",
-        ],
-    )
-
-    state_changed_only = st.sidebar.checkbox(
-        "State Changed Only",
-        value=False,
-    )
-
-    render_summary(df)
-
-    st.divider()
-
-    render_todays_opportunities(
-        opportunity_df,
         quality,
-        opportunity_path=opportunity_path,
-        is_fallback=opportunity_fallback,
     )
 
-    st.divider()
-
-    filtered = apply_filters(
-        df,
-        market_filter,
-        signal_filter,
-        symbol_search,
-        lifecycle_filter,
-        state_changed_only,
+    show_advanced = st.checkbox(
+        "Show Advanced Details",
+        value=DEFAULT_SHOW_ADVANCED_DETAILS,
+        key="scanner_show_advanced_details",
     )
 
-    with st.expander("Scanner Results", expanded=False):
-        if filtered.empty:
-            st.info("No results")
-        else:
-            render_add_to_watchlist(filtered)
-            render_table(filtered)
+    if not show_advanced:
+        return
+
+    with st.expander("Advanced Tools", expanded=False):
+        scanner_error = st.session_state.get("scanner_last_error", "")
+        if scanner_error:
+            with st.expander("Scanner Output", expanded=False):
+                st.code(
+                    scanner_error[-12000:],
+                    language="text",
+                )
+        render_scanner_status(
+            df,
+            result_path,
+            last_scan,
+            scan_metadata,
+        )
+        render_debug_info(
+            df,
+            result_path,
+            scan_metadata,
+        )
+        render_pipeline_health(
+            df,
+            opportunity_df,
+            scan_metadata,
+        )
+        render_market_quality_cards(df, last_scan)
+        render_lifecycle_section(df)
+        render_summary(df)
+
+        render_todays_opportunities(
+            opportunity_df,
+            quality,
+            opportunity_path=opportunity_path,
+            is_fallback=opportunity_fallback,
+        )
+
+        with st.expander("Scanner Results", expanded=False):
+            render_add_to_watchlist(df)
+            render_table(df)

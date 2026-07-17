@@ -17,6 +17,9 @@ def ranked_row(**overrides):
         "RecommendedAction": "Review First",
         "AIDecision": "BUY",
         "AIConfidence": 72,
+        "EMA9": 11,
+        "EMA20": 10,
+        "DaysSinceEMA9CrossEMA20": 0,
         "RR": 2.4,
         "EntryPrice": 10,
         "StopPrice": 9,
@@ -184,3 +187,42 @@ def test_missing_optional_fields_do_not_crash_and_do_not_enter_buy_queue():
     assert buy_queue.empty
     assert watch_queue.empty
     assert "EligibilityReasons" in normalized.columns
+
+
+def test_stale_cross_cannot_enter_buy_or_prepare_queue():
+    ranked = pd.DataFrame(
+        [
+            ranked_row(
+                Symbol="STALE.BK",
+                DaysSinceEMA9CrossEMA20=10,
+                AIConfidence=100,
+                PriorityScore=100,
+                SeedScore=100,
+                RR=5,
+            )
+        ]
+    )
+
+    normalized, buy_queue, watch_queue = split_candidate_queues(ranked)
+
+    assert buy_queue.empty
+    assert watch_queue.empty
+    assert normalized.iloc[0]["QueueClass"] == "IGNORE"
+    assert normalized.iloc[0]["FreshCrossStatusLabel"] == "Cross เก่า"
+    assert "Fresh EMA cross required" in normalized.iloc[0]["BlockingReasons"]
+
+
+def test_cross_age_two_can_enter_buy_queue():
+    ranked = pd.DataFrame(
+        [
+            ranked_row(
+                Symbol="AGE2.BK",
+                DaysSinceEMA9CrossEMA20=2,
+            )
+        ]
+    )
+
+    normalized, buy_queue, _ = split_candidate_queues(ranked)
+
+    assert normalized.iloc[0]["FreshCrossEligible"]
+    assert buy_queue["Symbol"].tolist() == ["AGE2.BK"]

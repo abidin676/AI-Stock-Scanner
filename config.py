@@ -45,6 +45,10 @@ EXCEL_FILE = "scanner_results.xlsx"
 
 MIN_SCORE = 70
 
+# Maximum number of daily trading bars since EMA9 crossed above EMA20
+# for a candidate to be considered a fresh cross.
+MAX_FRESH_CROSS_DAYS = 2
+
 SHOW_ONLY = [
     "EARLY BUY",
     "WATCH",

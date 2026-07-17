@@ -8,6 +8,7 @@
 - Opportunity score audit diagnostics.
 - Pipeline funnel diagnostics for empty Buy/Watch queues.
 - Queue consistency through central eligibility semantics.
+- Permanent Fresh EMA9-over-EMA20 Cross policy for every main recommendation surface.
 - Risk summary clarification for current exposure vs proposed additional exposure.
 - Regression tests for scan routing, metadata, eligibility and pipeline alignment.
 
@@ -45,10 +46,15 @@ Known test debt not included in v1.5 scope:
 - Risk projected exposure corrected to use valid proposals only.
 
 Policy defaults:
+- FRESH CROSS (mandatory): EMA9 > EMA20 and cross age 0–2 daily trading bars. This hard gate applies to Today's Picks, Top 5 SET/USA, BUY, PREPARE, alert candidates, and Buy Queue.
 - BUY: PriorityScore >= 70, RR >= 1.8, valid entry/stop/target, no hard block.
 - PREPARE: SeedScore >= 80, PriorityScore >= 55, RR >= 1.5, early/base context.
 - WATCH: OpportunityScore >= 45 or equivalent early watch context.
 - AI confidence below 55 is a warning, not a duplicate hard veto.
+
+Show all policy:
+- `Show all` is diagnostic-only and cannot bypass the Fresh Cross gate.
+- Crosses older than two trading bars remain visible as `Cross เก่า`; missing cross history is labeled `ยังไม่ Cross`.
 
 Remaining Phase 2 work:
 - Calibrate thresholds with recommendation history and scorecard evidence.

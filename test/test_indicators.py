@@ -1,6 +1,6 @@
 import pandas as pd
 
-from indicators import add_indicators
+from indicators import add_indicators, days_since_event
 
 
 def deterministic_ohlcv(rows=240):
@@ -86,6 +86,28 @@ def test_indicator_columns_needed_by_scanner_exist():
         "base_days",
         "dry_volume_days",
         "pocket_pivot",
+        "days_since_ema9_cross_ema20",
     }
 
     assert expected_columns.issubset(result.columns)
+
+
+def test_days_since_event_counts_trading_bars_not_calendar_days():
+    trading_dates = pd.to_datetime(
+        [
+            "2026-07-02",  # Thursday
+            "2026-07-03",  # Friday: cross
+            "2026-07-06",  # Monday: one trading bar later
+            "2026-07-07",  # Tuesday: two trading bars later
+        ]
+    )
+    cross_event = pd.Series(
+        [False, True, False, False],
+        index=trading_dates,
+    )
+
+    result = days_since_event(cross_event)
+
+    assert result.loc[pd.Timestamp("2026-07-03")] == 0
+    assert result.loc[pd.Timestamp("2026-07-06")] == 1
+    assert result.loc[pd.Timestamp("2026-07-07")] == 2
