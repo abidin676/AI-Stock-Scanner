@@ -51,6 +51,53 @@ The first execution scope is SET and is permanently paper-only. The robot reuses
 - Safety config is locked to `paper_only=true` and `execution_mode=MANUAL`; the Paper Broker only creates simulated `MARKET_SIMULATED` orders.
 - `output/paper_trading_robot_audit.csv` records every accepted or excluded candidate and its primary reason. `output/paper_trading_robot_proposals.csv` records robot proposals passed to Risk Manager/Approval Queue.
 
+## Windows SET Paper Scan Automation
+
+River Alpha can run an approval-only SET scan automatically every Monday-Friday at 16:45 Asia/Bangkok. The scheduled runner executes exactly:
+
+```powershell
+python scanner.py --mode SET --force-refresh
+```
+
+It validates that the completion metadata and manifest belong to a new SET-only `ScanRunId`, confirm `ForceRefresh=true`, and contain usable fresh SET rows before accepting any queue result. A failed or stale scan rolls back Approval Queue/paper runtime changes and never falls back to old output. Duplicate daily runs and duplicate `Symbol + ScanRunId` proposals are blocked.
+
+The automation only creates `PENDING` proposals through the existing Scanner -> Eligibility -> AI Decision -> Risk Manager -> Approval Queue -> Paper Trading pipeline. It never approves, fills, calls a broker API, or sends a real order. All Fresh Cross, EMA, BUY, SET RVOL, extension, trend, and risk hard gates remain unchanged.
+
+Preview the Task Scheduler configuration without installing anything:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install_set_paper_scan_task.ps1 -WhatIf
+```
+
+Install only after reviewing the preview:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install_set_paper_scan_task.ps1 -Install
+```
+
+The task is named `RiverAlpha-SET-PaperScan-1645`, uses the Windows `SE Asia Standard Time` zone, ignores overlapping launches, and runs while the installing user is logged on.
+
+Run the same production time/day checks manually:
+
+```powershell
+scripts\run_set_paper_scan.bat
+```
+
+For a deliberate manual test outside the Monday-Friday post-16:45 window:
+
+```powershell
+scripts\run_set_paper_scan.bat --run-now
+```
+
+Daily logs are appended to `logs/set_paper_scan_YYYY-MM-DD.log`. If no BUY passes every gate, the runner exits successfully and logs `No eligible SET candidates`. A successful day is recorded in `logs/set_paper_scan_state.json` so a second launch cannot scan or propose again.
+
+Preview task removal, then uninstall explicitly:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\uninstall_set_paper_scan_task.ps1 -WhatIf
+powershell -ExecutionPolicy Bypass -File scripts\uninstall_set_paper_scan_task.ps1 -Uninstall
+```
+
 ## Screenshot
 
 ![River Alpha Scanner dashboard](docs/screenshots/scanner.png)

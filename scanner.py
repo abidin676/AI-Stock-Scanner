@@ -118,6 +118,9 @@ SCAN_MODE_PLANS = {
         ("SET", "SET"),
         ("USA ALL", "USA"),
     ],
+    "SET": [
+        ("SET", "SET"),
+    ],
     "SET50": [
         ("SET50", "SET"),
     ],
@@ -136,6 +139,7 @@ SCAN_MODE_PLANS = {
 }
 SCAN_MODE_CHOICES = [
     "ALL",
+    "SET",
     "SET50",
     "SET100",
     "SET All",
@@ -1909,7 +1913,7 @@ if __name__ == "__main__":
         "--mode",
         default="ALL",
         help=(
-            "Scan mode: ALL, SET50, SET100, SET All, "
+            "Scan mode: ALL, SET, SET50, SET100, SET All, "
             "USA Watchlist, USA All."
         ),
     )

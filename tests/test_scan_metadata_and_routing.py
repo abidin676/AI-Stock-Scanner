@@ -15,6 +15,10 @@ def test_all_mode_routes_to_set_and_usa():
     ]
 
 
+def test_set_mode_routes_to_existing_set_universe():
+    assert scanner.resolve_scan_plan("SET") == [("SET", "SET")]
+
+
 def test_all_mode_merges_set_and_usa_results(monkeypatch):
     captured = {}
     calls = []

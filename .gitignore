@@ -26,6 +26,8 @@ data/paper_trades.csv
 data/recommendation_history.csv
 tmp/
 *.log
+logs/*.json
+logs/*.lock
 data/.*.tmp.*
 output/.*.tmp.*
 
