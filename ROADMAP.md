@@ -12,6 +12,18 @@
 - Risk summary clarification for current exposure vs proposed additional exposure.
 - Regression tests for scan routing, metadata, eligibility and pipeline alignment.
 
+## Paper Trading Approval Automation
+
+- SET-only execution scope for the first robot release.
+- Existing Scanner, Candidate Eligibility, AI Decision, and Risk Manager rules remain authoritative and unchanged.
+- Strict entry gate: Fresh EMA9-over-EMA20 cross age 0-2 trading bars, EMA9 above EMA20, BUY only, SET RVOL at least 1.5x, and no EXTENDED/SKIP or existing quality/risk block.
+- Risk-approved proposals enter Approval Queue as PENDING; approval and simulated fill are two separate manual actions.
+- No live broker connection, API, credential, or real-money order path. Paper Broker is locked to paper-only manual execution.
+- Symbol + ScanRunId deduplication plus pre-proposal max-position, exposure, cash, and reserve controls.
+- Stop loss, target, highest-price trailing stop, and exit triggers remain approval-gated throughout the paper position lifecycle.
+- Unified Paper Trading dashboard for PENDING, APPROVED, FILLED, REJECTED, CANCELLED, EXPIRED, and hard-gate rejection reasons.
+- Paper robot proposal and audit CSVs provide an explainable trace for every scanned candidate.
+
 Known test debt not included in v1.5 scope:
 - `test/test_backtest.py` still calls the legacy `run_backtest()` signature.
 - `test_strategy.py` collides with `test/test_strategy.py` during pytest collection.

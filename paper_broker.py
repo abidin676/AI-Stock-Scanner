@@ -223,6 +223,9 @@ REJECT_REASON_COMPAT = {
     "INVALID_QUANTITY": "INVALID_QUANTITY",
     "INVALID_PRICE": "MISSING_PRICE",
     "CONFIG_ERROR": "CONFIG_ERROR",
+    "PAPER_ONLY_REQUIRED": "PAPER_ONLY_REQUIRED",
+    "MANUAL_EXECUTION_REQUIRED": "MANUAL_EXECUTION_REQUIRED",
+    "ROBOT_MARKET_NOT_ALLOWED": "ROBOT_MARKET_NOT_ALLOWED",
     "INVALID_ACTION": "INVALID_ACTION",
     "BELOW_BOARD_LOT": "BELOW_BOARD_LOT",
 }
@@ -230,6 +233,7 @@ REJECT_REASON_COMPAT = {
 
 @dataclass(frozen=True)
 class PaperBrokerConfig:
+    paper_only: bool = True
     initial_cash: float = 100000.0
     starting_cash: float = 100000.0
     fill_policy: str = "FULL_FILL"
@@ -256,6 +260,8 @@ class PaperBrokerConfig:
     auto_mark_executed: bool = True
     require_approved_status: bool = True
     execution_mode: str = "MANUAL"
+    trailing_stop_enabled: bool = True
+    trailing_stop_pct: float = 5.0
     paper_broker_version: str = PAPER_BROKER_VERSION
 
 
@@ -608,6 +614,12 @@ def reject_order(row: Mapping[str, Any], action: str, code: str, reference_price
 
 
 def validate_proposal(row: Mapping[str, Any], cfg: PaperBrokerConfig, reference_price: float, qty: float, action: str, status: str) -> str:
+    if not cfg.paper_only:
+        return "PAPER_ONLY_REQUIRED"
+    if safe_upper(cfg.execution_mode) != "MANUAL":
+        return "MANUAL_EXECUTION_REQUIRED"
+    if safe_text(row.get("RobotKey")) and safe_upper(row.get("Market")) != "SET":
+        return "ROBOT_MARKET_NOT_ALLOWED"
     if not proposal_id(row):
         return "CONFIG_ERROR"
     if cfg.require_approved_status and status != "APPROVED":

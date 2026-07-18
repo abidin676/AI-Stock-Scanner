@@ -43,6 +43,10 @@ PORTFOLIO_COLUMNS = [
     "TotalCommission",
     "StopPrice",
     "TargetPrice",
+    "HighestPrice",
+    "TrailingStopPrice",
+    "ExitReason",
+    "ExitTriggeredTime",
     "LastProposalId",
     "LastOrderId",
     "LastFillId",
@@ -209,6 +213,8 @@ def numeric_portfolio_columns() -> set[str]:
         "TotalCommission",
         "StopPrice",
         "TargetPrice",
+        "HighestPrice",
+        "TrailingStopPrice",
     }
 
 
@@ -254,6 +260,10 @@ def position_template(symbol: str, market: str, now: str) -> dict[str, Any]:
         "TotalCommission": 0.0,
         "StopPrice": 0.0,
         "TargetPrice": 0.0,
+        "HighestPrice": 0.0,
+        "TrailingStopPrice": 0.0,
+        "ExitReason": "",
+        "ExitTriggeredTime": "",
         "LastProposalId": "",
         "LastOrderId": "",
         "LastFillId": "",
@@ -406,6 +416,21 @@ def apply_fill_to_portfolio(
         portfolio.at[idx, "LastPrice"] = fill_price
         portfolio.at[idx, "StopPrice"] = stop or safe_float(before.get("StopPrice"))
         portfolio.at[idx, "TargetPrice"] = target or safe_float(before.get("TargetPrice"))
+        highest = max(safe_float(before.get("HighestPrice")), fill_price)
+        trailing_enabled = bool(getattr(config, "trailing_stop_enabled", True))
+        trailing_pct = max(safe_float(getattr(config, "trailing_stop_pct", 5.0)), 0)
+        trailing = highest * (1 - trailing_pct / 100) if trailing_enabled and trailing_pct > 0 else 0
+        portfolio.at[idx, "HighestPrice"] = round(highest, 6)
+        portfolio.at[idx, "TrailingStopPrice"] = round(
+            max(
+                safe_float(before.get("TrailingStopPrice")),
+                stop,
+                trailing,
+            ),
+            6,
+        )
+        portfolio.at[idx, "ExitReason"] = ""
+        portfolio.at[idx, "ExitTriggeredTime"] = ""
         portfolio.at[idx, "PositionStatus"] = "OPEN"
         portfolio.at[idx, "ClosedTime"] = ""
 

@@ -39,6 +39,10 @@ ACTIONABLE_ACTIONS = {
 
 QUEUE_COLUMNS = [
     "ProposalId",
+    "ScanRunId",
+    "RobotKey",
+    "AutomationType",
+    "AutomationReason",
     "Symbol",
     "Market",
     "Action",
@@ -360,6 +364,10 @@ def queue_row_from_risk_proposal(
 
     return {
         "ProposalId": proposal_id,
+        "ScanRunId": safe_text(row.get("ScanRunId")),
+        "RobotKey": safe_text(row.get("RobotKey")),
+        "AutomationType": safe_upper(row.get("AutomationType", "ENTRY")),
+        "AutomationReason": safe_text(row.get("AutomationReason")),
         "Symbol": safe_text(row.get("Symbol")).upper(),
         "Market": safe_text(row.get("Market")).upper(),
         "Action": action,
@@ -453,6 +461,11 @@ def sync_approval_queue(
         return queue, history
 
     existing_ids = set(queue["ProposalId"].astype(str))
+    existing_robot_keys = {
+        safe_text(value)
+        for value in queue.get("RobotKey", pd.Series(dtype=str)).tolist()
+        if safe_text(value)
+    }
     queue_rows = []
 
     for _, proposal in risk_proposals.iterrows():
@@ -465,6 +478,10 @@ def sync_approval_queue(
             continue
 
         proposal_id = new_row["ProposalId"]
+        robot_key = safe_text(new_row.get("RobotKey"))
+
+        if robot_key and robot_key in existing_robot_keys:
+            continue
 
         if proposal_id in existing_ids:
             current_idx = queue.index[queue["ProposalId"] == proposal_id]
@@ -498,6 +515,8 @@ def sync_approval_queue(
             continue
 
         existing_ids.add(proposal_id)
+        if robot_key:
+            existing_robot_keys.add(robot_key)
         queue_rows.append(new_row)
         records.append(
             history_record(

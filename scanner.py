@@ -44,8 +44,8 @@ from ai_decision_engine import (
 from approval_queue import (
     build_approval_summary,
     ready_for_paper_broker,
-    sync_approval_queue,
 )
+from paper_trading_robot import run_paper_trading_robot
 from paper_broker import load_daily_state, load_paper_broker_config
 from paper_portfolio import (
     calculate_portfolio_summary,
@@ -1360,8 +1360,35 @@ def save_risk_manager_summary(ai_decisions):
         print(f"Saved Risk Summary: {summary_path}")
 
         try:
-            approval_queue, _ = sync_approval_queue(proposals)
+            # The generic Risk Manager output remains a diagnostic artifact.
+            # Only the SET paper robot may admit strict BUY candidates into the
+            # Approval Queue, and it always requires a separate user approval.
+            robot_result = run_paper_trading_robot(ai_decisions)
+            approval_queue = robot_result.queue
             approval_summary = build_approval_summary(approval_queue)
+
+            robot_pending = int(
+                (
+                    robot_result.proposals.get(
+                        "ProposalStatus",
+                        pd.Series(dtype=str),
+                    ).astype(str).str.upper()
+                    == "PENDING_APPROVAL"
+                ).sum()
+            )
+            robot_rejected = int(
+                (
+                    robot_result.proposals.get(
+                        "ProposalStatus",
+                        pd.Series(dtype=str),
+                    ).astype(str).str.upper()
+                    == "REJECTED"
+                ).sum()
+            )
+            print("\n========== PAPER TRADING ROBOT ==========")
+            print("Execution Scope: SET paper-only")
+            print(f"Robot Pending Approval: {robot_pending}")
+            print(f"Robot Risk Rejected: {robot_rejected}")
 
             if not approval_summary.empty:
                 approval_row = approval_summary.iloc[0]
