@@ -1,6 +1,34 @@
 import pandas as pd
+from streamlit.testing.v1 import AppTest
 
+from paper_broker import PaperBrokerConfig, load_paper_broker_config
+from views.approval_queue import display_status
 from views.paper_trading import DISPLAY_STATUSES, build_paper_trading_status_table
+
+
+def render_paper_trading_page():
+    from views.paper_trading import paper_trading_page
+
+    paper_trading_page()
+
+
+def test_paper_config_defaults_to_paper_only():
+    assert PaperBrokerConfig().paper_only is True
+    assert load_paper_broker_config().paper_only is True
+
+
+def test_paper_trading_page_renders_without_traceback():
+    app = AppTest.from_function(render_paper_trading_page, default_timeout=10).run()
+
+    assert not app.exception
+    assert [title.value for title in app.title] == ["River Alpha Paper Trading"]
+    assert not app.error
+
+
+def test_approval_queue_uses_current_display_statuses():
+    assert display_status("PENDING_APPROVAL") == "PENDING"
+    assert display_status("EXECUTED") == "FILLED"
+    assert display_status("APPROVED") == "APPROVED"
 
 
 def test_status_table_exposes_all_required_lifecycle_states_and_reasons():

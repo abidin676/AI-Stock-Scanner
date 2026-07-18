@@ -8,13 +8,31 @@ from approval_queue import (
     APPROVAL_QUEUE_FILE,
     ApprovalQueueError,
     approve_proposal,
-    build_approval_summary,
     cancel_proposal,
     load_approval_history,
     ready_for_paper_broker,
     reject_proposal,
     sync_approval_queue,
 )
+
+
+DISPLAY_STATUSES = [
+    "PENDING",
+    "APPROVED",
+    "FILLED",
+    "REJECTED",
+    "CANCELLED",
+    "EXPIRED",
+]
+
+STATUS_LABELS = {
+    "PENDING_APPROVAL": "PENDING",
+    "APPROVED": "APPROVED",
+    "EXECUTED": "FILLED",
+    "REJECTED": "REJECTED",
+    "CANCELLED": "CANCELLED",
+    "EXPIRED": "EXPIRED",
+}
 
 
 def safe_number(value, default=0.0):
@@ -24,6 +42,11 @@ def safe_number(value, default=0.0):
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def display_status(value):
+    status = str(value or "").strip().upper()
+    return STATUS_LABELS.get(status, status or "UNKNOWN")
 
 
 def load_queue_with_expiry():
@@ -44,23 +67,27 @@ def queue_filter_options(df, column):
 
 
 def render_summary_cards(queue):
-    summary = build_approval_summary(queue)
-    row = summary.iloc[0] if not summary.empty else {}
-
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Pending", int(safe_number(row.get("Pending", 0))))
-    c2.metric("Approved", int(safe_number(row.get("Approved", 0))))
-    c3.metric("Rejected", int(safe_number(row.get("Rejected", 0))))
-    c4.metric("Expired", int(safe_number(row.get("Expired", 0))))
-    c5.metric("Cancelled", int(safe_number(row.get("Cancelled", 0))))
+    status_counts = (
+        queue.get("Status", pd.Series(dtype=str))
+        .map(display_status)
+        .value_counts()
+        .to_dict()
+    )
+    first_row = st.columns(3)
+    second_row = st.columns(3)
+    for column, status in zip([*first_row, *second_row], DISPLAY_STATUSES):
+        column.metric(status, int(status_counts.get(status, 0)))
 
     st.caption(
-        "Approved proposals are only staged for future Paper Broker integration. "
-        "No order is executed in this phase."
+        "Approval Queue is the manual gate before Paper Trade. Approve first, "
+        "then use Paper Trading for an explicit simulated Fill."
     )
 
 
 def filter_queue(queue):
+    queue = queue.copy()
+    queue["DisplayStatus"] = queue.get("Status", pd.Series(dtype=str)).map(display_status)
+
     with st.expander("Filters", expanded=False):
         c1, c2, c3, c4 = st.columns(4)
         market_filter = c1.selectbox(
@@ -76,8 +103,8 @@ def filter_queue(queue):
         )
         status_filter = c3.multiselect(
             "Status",
-            queue_filter_options(queue, "Status"),
-            default=["PENDING_APPROVAL"] if "PENDING_APPROVAL" in queue_filter_options(queue, "Status") else ["ALL"],
+            ["ALL", *DISPLAY_STATUSES],
+            default=["PENDING"] if "PENDING" in set(queue["DisplayStatus"]) else ["ALL"],
             key="approval_status_filter",
         )
         symbol_search = c4.text_input(
@@ -96,7 +123,7 @@ def filter_queue(queue):
         filtered = filtered[filtered["Action"].isin(action_filter)]
 
     if "ALL" not in status_filter:
-        filtered = filtered[filtered["Status"].isin(status_filter)]
+        filtered = filtered[filtered["DisplayStatus"].isin(status_filter)]
 
     if symbol_search.strip():
         needles = [
@@ -124,7 +151,7 @@ def render_queue_table(filtered):
         "ProposedOrderValue",
         "RiskScore",
         "AIConfidence",
-        "Status",
+        "DisplayStatus",
         "CreatedTime",
         "ExpireTime",
     ]
@@ -134,6 +161,7 @@ def render_queue_table(filtered):
             "ProposedOrderValue": "Order Value",
             "RiskScore": "Risk Score",
             "AIConfidence": "AI Confidence",
+            "DisplayStatus": "Status",
             "CreatedTime": "Created Time",
             "ExpireTime": "Expire Time",
         }
@@ -142,7 +170,7 @@ def render_queue_table(filtered):
     st.markdown("**Proposal Queue**")
     st.dataframe(
         display,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
@@ -150,7 +178,7 @@ def render_queue_table(filtered):
 def render_metric_grid(row):
     c1, c2, c3, c4, c5, c6 = st.columns(6)
     c1.metric("Action", row["Action"])
-    c2.metric("Status", row["Status"])
+    c2.metric("Status", display_status(row["Status"]))
     c3.metric("Qty", f"{safe_number(row['Quantity']):,.2f}")
     c4.metric("Entry", f"{safe_number(row['EntryPrice']):,.2f}")
     c5.metric("Stop", f"{safe_number(row['StopPrice']):,.2f}")
@@ -219,7 +247,7 @@ def render_detail_tabs(row):
         if history.empty:
             st.info("No history found for this proposal.")
         else:
-            st.dataframe(history, use_container_width=True, hide_index=True)
+            st.dataframe(history, width="stretch", hide_index=True)
 
 
 def render_manual_actions(row):
@@ -230,8 +258,8 @@ def render_manual_actions(row):
         return
 
     st.warning(
-        "Approval only changes queue status. "
-        "No broker API call and no paper trade execution will run."
+        "Approve changes the proposal to APPROVED and makes it available for "
+        "manual Fill in Paper Trading. It never fills automatically."
     )
 
     approved_by = st.text_input(
@@ -250,7 +278,7 @@ def render_manual_actions(row):
     if c1.button("Approve", key=f"approve_{row['ProposalId']}"):
         try:
             approve_proposal(row["ProposalId"], approved_by=approved_by)
-            st.success("Proposal approved. It is now ready for future Paper Broker integration.")
+            st.success("Proposal approved. Open Paper Trading to review and Fill the simulated order.")
             st.rerun()
         except ApprovalQueueError as exc:
             st.error(str(exc))
@@ -283,14 +311,14 @@ def render_manual_actions(row):
 def render_ready_preview(queue):
     ready = ready_for_paper_broker(queue)
 
-    with st.expander("Ready For Future Paper Broker", expanded=False):
+    with st.expander("APPROVED — Ready For Paper Trading Fill", expanded=False):
         st.caption(
-            "Preview only. Rejected, expired, cancelled, and pending proposals are excluded. "
-            "No order execution exists in this phase."
+            "Only APPROVED proposals are shown. Fill remains a separate explicit "
+            "action on the Paper Trading page."
         )
 
         if ready.empty:
-            st.info("No approved proposals ready for future Paper Broker integration.")
+            st.info("No APPROVED proposals are waiting for a Paper Trading Fill.")
             return
 
         columns = [
@@ -304,19 +332,18 @@ def render_ready_preview(queue):
             "ApprovedBy",
             "ApprovedTime",
         ]
-        st.dataframe(
-            ready[[column for column in columns if column in ready.columns]],
-            use_container_width=True,
-            hide_index=True,
-        )
+        display = ready[[column for column in columns if column in ready.columns]].copy()
+        if "Status" in display.columns:
+            display["Status"] = display["Status"].map(display_status)
+        st.dataframe(display, width="stretch", hide_index=True)
 
 
 def approval_queue_page():
     st.title("Approval Queue")
-    st.caption("Manual control layer between Risk Manager and future Paper Broker.")
+    st.caption("Manual approval gate between Risk Manager and SET Paper Trading.")
     st.warning(
-        "Phase 1 is approval-only. There is no broker connection, no API call, "
-        "and no paper trade execution."
+        "PAPER TRADING ONLY — Approve here, then Fill explicitly on the Paper Trading page. "
+        "There is no real broker connection and no broker API call."
     )
 
     queue = load_queue_with_expiry()
@@ -334,7 +361,7 @@ def approval_queue_page():
         render_queue_table(filtered)
 
         labels = [
-            f"{row.ProposalId} | {row.Symbol} | {row.Action} | {row.Status}"
+            f"{row.ProposalId} | {row.Symbol} | {row.Action} | {display_status(row.Status)}"
             for row in filtered.itertuples()
         ]
         selected = st.selectbox(

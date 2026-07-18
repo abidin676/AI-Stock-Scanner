@@ -220,8 +220,13 @@ def paper_trading_page() -> None:
     st.warning("PAPER TRADING ONLY — ระบบนี้ไม่เชื่อมต่อและไม่ส่งคำสั่งไปโบรกเกอร์จริง")
 
     config = load_paper_broker_config()
-    if not config.paper_only or str(config.execution_mode).upper() != "MANUAL":
-        st.error("Safety lock: paper_only=true และ execution_mode=MANUAL เท่านั้น")
+    paper_only = getattr(config, "paper_only", False)
+    execution_mode = str(getattr(config, "execution_mode", "")).upper()
+    if paper_only is not True or execution_mode != "MANUAL":
+        st.error(
+            "Live broker execution ไม่รองรับ — "
+            "Paper Trading ต้องใช้ paper_only=true และ execution_mode=MANUAL เท่านั้น"
+        )
         st.stop()
 
     _render_account()

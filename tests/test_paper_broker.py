@@ -15,10 +15,13 @@ from paper_broker import (
     PAPER_ORDERS_FILE,
     PAPER_TRADES_FILE,
     PaperBrokerConfig,
+    create_order,
     execute_approved_batch,
     execute_approved_proposal,
     execute_paper_order,
     load_csv,
+    load_paper_broker_config,
+    submit_order,
     submit_paper_order,
 )
 from paper_portfolio import load_paper_account, load_paper_portfolio, save_paper_portfolio
@@ -84,6 +87,27 @@ def open_position(symbol="BUYOK", qty=1000, avg=10, last=10, market="SET"):
 @pytest.fixture(autouse=True)
 def isolated_runtime(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+
+
+def test_paper_only_defaults_true_when_config_file_is_missing(tmp_path):
+    config = load_paper_broker_config(path=tmp_path / "missing-paper-config.json")
+
+    assert PaperBrokerConfig().paper_only is True
+    assert config.paper_only is True
+
+
+def test_execution_refuses_when_paper_only_is_disabled():
+    proposal = approved_proposal()
+    rejected = create_order(proposal, config={"paper_only": False})
+
+    assert rejected["Status"] == "REJECTED"
+    assert rejected["RejectCode"] == "PAPER_ONLY_REQUIRED"
+    assert rejected["RejectReason"] == "Live broker execution is not supported"
+
+    created = create_order(proposal, config={"paper_only": True})
+    submitted = submit_order(created, config={"paper_only": False})
+    assert submitted["Status"] == "REJECTED"
+    assert submitted["RejectCode"] == "PAPER_ONLY_REQUIRED"
 
 
 def test_approved_buy_executes_successfully():

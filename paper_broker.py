@@ -223,8 +223,8 @@ REJECT_REASON_COMPAT = {
     "INVALID_QUANTITY": "INVALID_QUANTITY",
     "INVALID_PRICE": "MISSING_PRICE",
     "CONFIG_ERROR": "CONFIG_ERROR",
-    "PAPER_ONLY_REQUIRED": "PAPER_ONLY_REQUIRED",
-    "MANUAL_EXECUTION_REQUIRED": "MANUAL_EXECUTION_REQUIRED",
+    "PAPER_ONLY_REQUIRED": "Live broker execution is not supported",
+    "MANUAL_EXECUTION_REQUIRED": "Live broker execution is not supported",
     "ROBOT_MARKET_NOT_ALLOWED": "ROBOT_MARKET_NOT_ALLOWED",
     "INVALID_ACTION": "INVALID_ACTION",
     "BELOW_BOARD_LOT": "BELOW_BOARD_LOT",
@@ -298,6 +298,14 @@ def normalize_config(config: PaperBrokerConfig | Mapping[str, Any] | None = None
 
     if isinstance(config, Mapping):
         data.update(dict(config))
+
+    # Missing/null configuration is always safe by default. Explicit false is
+    # preserved so the UI and execution guards can refuse to run.
+    data["paper_only"] = (
+        True
+        if data.get("paper_only") is None
+        else safe_bool(data.get("paper_only"))
+    )
 
     if "starting_cash" in data and "initial_cash" not in data:
         data["initial_cash"] = data["starting_cash"]
@@ -613,11 +621,18 @@ def reject_order(row: Mapping[str, Any], action: str, code: str, reference_price
     }
 
 
-def validate_proposal(row: Mapping[str, Any], cfg: PaperBrokerConfig, reference_price: float, qty: float, action: str, status: str) -> str:
-    if not cfg.paper_only:
+def paper_execution_safety_code(config: PaperBrokerConfig) -> str:
+    if config.paper_only is not True:
         return "PAPER_ONLY_REQUIRED"
-    if safe_upper(cfg.execution_mode) != "MANUAL":
+    if safe_upper(config.execution_mode) != "MANUAL":
         return "MANUAL_EXECUTION_REQUIRED"
+    return "NONE"
+
+
+def validate_proposal(row: Mapping[str, Any], cfg: PaperBrokerConfig, reference_price: float, qty: float, action: str, status: str) -> str:
+    safety_code = paper_execution_safety_code(cfg)
+    if safety_code != "NONE":
+        return safety_code
     if safe_text(row.get("RobotKey")) and safe_upper(row.get("Market")) != "SET":
         return "ROBOT_MARKET_NOT_ALLOWED"
     if not proposal_id(row):
@@ -807,6 +822,10 @@ def load_daily_state(
 
 
 def run_portfolio_controls(order: Mapping[str, Any], account: Mapping[str, Any], portfolio_dataframe: pd.DataFrame, config: PaperBrokerConfig) -> str:
+    safety_code = paper_execution_safety_code(config)
+    if safety_code != "NONE":
+        return safety_code
+
     action = safe_upper(order.get("Action"))
     side = safe_upper(order.get("Side"))
     symbol = safe_upper(order.get("Symbol"))
@@ -907,6 +926,10 @@ def quantity_for_fill(order: Mapping[str, Any], config: PaperBrokerConfig, portf
 
 
 def validate_fill(order: Mapping[str, Any], fill_qty: float, fill_price: float, gross: float, commission: float, account: Mapping[str, Any], portfolio_dataframe: pd.DataFrame, config: PaperBrokerConfig) -> str:
+    safety_code = paper_execution_safety_code(config)
+    if safety_code != "NONE":
+        return safety_code
+
     action = safe_upper(order.get("Action"))
     side = safe_upper(order.get("Side"))
     symbol = safe_upper(order.get("Symbol"))
