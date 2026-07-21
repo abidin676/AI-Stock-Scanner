@@ -235,6 +235,8 @@ def simple_ready_row(symbol, decision="WATCH", **overrides):
         StrategySetup="Early Reversal",
         EMA9=10.2,
         EMA20=10,
+        EMA50=9.5,
+        EMA20Improving=True,
         EMA9AboveEMA20=True,
         DaysSinceEMA9CrossEMA20=0,
         LatestPriceDate="2026-07-17",
@@ -253,6 +255,75 @@ def simple_ready_row(symbol, decision="WATCH", **overrides):
     )
     row.update(overrides)
     return row
+
+
+def egatif_regression_row(bar_state):
+    return simple_ready_row(
+        "EGATIF.BK",
+        "PREPARE",
+        Price=6.20,
+        AIConfidence=85.2,
+        PriorityScore=81.23,
+        OpportunityScore=76.38,
+        StrategySignal="WATCH",
+        StrategySetup="Early Reversal",
+        LifecycleState="WATCH",
+        EMA9=6.1602,
+        EMA20=6.1544,
+        PreviousEMA20=6.1496,
+        EMA50=6.11,
+        EMA20Improving=True,
+        LatestPriceDate="2026-07-21",
+        CrossDate="2026-07-17",
+        DaysSinceEMA9CrossEMA20=2,
+        BullishCrossEvent=False,
+        RVOL=2.48,
+        RSI=62.2,
+        DistanceEMA20Pct=0.4,
+        ExpansionScore=10,
+        RR=2.46,
+        RiskPct=1.31,
+        RewardPct=3.23,
+        RiskApproved=False,
+        ProposalStatus="NO_PROPOSAL",
+        RejectReason="QUEUE_CLASS_PREPARE",
+        BarState=bar_state,
+    )
+
+
+def test_egatif_confirmed_bar_is_buy_with_complete_risk_levels():
+    candidates = prepare_daily_candidates(
+        pd.DataFrame([egatif_regression_row("CONFIRMED")])
+    )
+    row = candidates.iloc[0]
+
+    assert row["FreshCrossEligible"]
+    assert row["DaysSinceEMA9CrossEMA20"] == 2
+    assert row["TrendFilterPassed"]
+    assert row["BuyReadinessStatus"] == "READY"
+    assert row["_DisplayAction"] == "BUY"
+    assert row["_ActionLabel"] == "ซื้อได้"
+    assert row["_MissingConditions"] == ""
+    assert row["EntryPrice"] == pytest.approx(6.20)
+    assert 0 < row["StopPrice"] < row["EntryPrice"]
+    assert row["TargetPrice"] > row["EntryPrice"]
+
+
+def test_egatif_live_bar_waits_for_close_without_losing_buy_eligibility():
+    candidates = prepare_daily_candidates(
+        pd.DataFrame([egatif_regression_row("LIVE")])
+    )
+    row = candidates.iloc[0]
+
+    assert row["StrategyBuyEligible"]
+    assert not row["BarConfirmed"]
+    assert row["BuyReadinessStatus"] == "WAIT_CONFIRMATION"
+    assert row["_DisplayAction"] == "WAIT_CONFIRMATION"
+    assert row["_ActionLabel"] == "รอยืนยันปิดแท่ง"
+    assert row["_MissingConditions"] == "รอยืนยันปิดแท่ง"
+    assert row["_NextAction"] == "รอยืนยันปิดแท่ง"
+    assert row["StopPrice"] > 0
+    assert row["TargetPrice"] > row["EntryPrice"]
 
 
 def test_simple_dashboard_buy_now_requires_buy_and_risk_passed():

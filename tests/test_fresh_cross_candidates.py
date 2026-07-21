@@ -24,6 +24,7 @@ def candidate(symbol, market="SET", score=80, cross_age=0, **overrides):
         "Market": market,
         "EMA9": 11,
         "EMA20": 10,
+        "EMA50": 9.5,
         "PreviousEMA9": 9.8 if cross_age == 0 else 10.5,
         "PreviousEMA20": 10,
         "BullishCrossEvent": cross_age == 0,

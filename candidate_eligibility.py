@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from datetime import time
 from pathlib import Path
 from typing import Any, Mapping
 import json
@@ -13,6 +14,7 @@ from fresh_cross_candidates import (
     fresh_cross_candidates,
     is_candidate_extended,
 )
+from risk_manager import add_indicative_risk_levels, indicative_risk_levels
 
 
 POLICY_CONFIG_FILE = Path("config") / "candidate_eligibility_config.json"
@@ -20,6 +22,7 @@ DEFAULT_POLICY_VERSION = "fresh_ema_cross_0_2_v1"
 VALID_MARKETS = {"SET", "USA"}
 SKIP_TERMS = {"SKIP", "NO DATA", "NO_DATA", "AVOID"}
 RISK_REJECTED_STATUSES = {"REJECTED"}
+SET_CONFIRMED_BAR_TIME = time(16, 40)
 
 
 @dataclass(frozen=True)
@@ -68,6 +71,11 @@ class EligibilityResult:
     rvol_prepare_threshold: float
     rvol_buy_threshold: float
     rvol_action: str
+    trend_filter_passed: bool
+    daily_bar_state: str
+    bar_confirmed: bool
+    strategy_buy_eligible: bool
+    buy_readiness_status: str
 
 
 def safe_float(value: Any, default: float = 0.0) -> float:
@@ -92,6 +100,14 @@ def safe_text(value: Any, default: str = "") -> str:
 
 def upper_text(value: Any, default: str = "") -> str:
     return safe_text(value, default).upper()
+
+
+def safe_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return upper_text(value) in {"TRUE", "YES", "Y", "1", "PASS", "PASSED"}
 
 
 def first_value(row: pd.Series | Mapping[str, Any], *columns: str, default: Any = "") -> Any:
@@ -164,6 +180,76 @@ def is_extended(row: pd.Series | Mapping[str, Any]) -> bool:
     return is_candidate_extended(row)
 
 
+def trend_filter_passes(row: pd.Series | Mapping[str, Any]) -> bool:
+    explicit = first_value(
+        row,
+        "TrendFilterPassed",
+        "TrendFilterPass",
+        "TrendFilter",
+        default="",
+    )
+    if safe_text(explicit):
+        return safe_bool(explicit)
+
+    price = safe_float(first_value(row, "Price", "Close", "EntryPrice", default=0))
+    ema20 = safe_float(row.get("EMA20"))
+    previous_ema20 = safe_float(row.get("PreviousEMA20"))
+    ema50 = safe_float(row.get("EMA50"))
+    ema20_rising = safe_bool(row.get("EMA20Improving")) or (
+        ema20 > 0 and previous_ema20 > 0 and ema20 > previous_ema20
+    )
+    return bool(price > 0 and ema50 > 0 and price > ema50 and ema20_rising)
+
+
+def daily_bar_state(row: pd.Series | Mapping[str, Any]) -> str:
+    explicit = upper_text(
+        first_value(row, "DailyBarState", "BarState", default="")
+    )
+    if explicit in {"CONFIRMED", "CLOSED", "CLOSE", "EOD"}:
+        return "CONFIRMED"
+    if explicit in {"LIVE", "OPEN", "FORMING", "UNCONFIRMED"}:
+        return "LIVE"
+
+    confirmed_value = first_value(row, "IsBarConfirmed", default="")
+    if safe_text(confirmed_value):
+        return "CONFIRMED" if safe_bool(confirmed_value) else "LIVE"
+
+    latest = pd.to_datetime(
+        first_value(row, "LatestPriceDate", "date", default=""),
+        errors="coerce",
+    )
+    observed = pd.to_datetime(
+        first_value(
+            row,
+            "ScanCompletedAt",
+            "CollectedAt",
+            "AsOf",
+            default="",
+        ),
+        errors="coerce",
+    )
+    if pd.isna(observed):
+        observed = pd.Timestamp.now(tz="Asia/Bangkok")
+    elif observed.tzinfo is not None:
+        observed = observed.tz_convert("Asia/Bangkok")
+
+    if pd.isna(latest):
+        return "UNKNOWN"
+    if latest.date() < observed.date():
+        return "CONFIRMED"
+    if latest.date() > observed.date():
+        return "UNKNOWN"
+
+    market = upper_text(row.get("Market"))
+    if market == "SET":
+        return (
+            "CONFIRMED"
+            if observed.time() >= SET_CONFIRMED_BAR_TIME
+            else "LIVE"
+        )
+    return "LIVE"
+
+
 def has_skip_signal(row: pd.Series | Mapping[str, Any]) -> bool:
     lifecycle = upper_text(row.get("LifecycleState"))
     text = signal_text(row)
@@ -173,7 +259,7 @@ def has_skip_signal(row: pd.Series | Mapping[str, Any]) -> bool:
 def early_stage_exception(row: pd.Series | Mapping[str, Any], config: EligibilityConfig) -> bool:
     seed_score = safe_float(row.get("SeedScore"))
     priority_score = safe_float(row.get("PriorityScore"))
-    rr = safe_float(first_value(row, "RiskRewardRatio", "RR", default=0))
+    rr = safe_float(first_value(row, "RR", "RiskRewardRatio", default=0))
     lifecycle = upper_text(row.get("LifecycleState"))
     pattern = upper_text(row.get("PatternName"))
     setup_text = signal_text(row)
@@ -196,7 +282,8 @@ def evaluate_candidate_eligibility(
     config: EligibilityConfig | Mapping[str, Any] | None = None,
 ) -> EligibilityResult:
     cfg = normalize_config(config)
-    row = candidate if isinstance(candidate, Mapping) else candidate.to_dict()
+    row = dict(candidate) if isinstance(candidate, Mapping) else candidate.to_dict()
+    risk_levels = indicative_risk_levels(row)
     fresh_cross = evaluate_fresh_cross_policy(row)
     blocking: list[str] = []
     warnings: list[str] = []
@@ -212,12 +299,24 @@ def evaluate_candidate_eligibility(
     entry = safe_float(first_value(row, "EntryPrice", "Price", "Close", default=0))
     stop = safe_float(first_value(row, "StopPrice", "StopLoss", default=0))
     target = safe_float(first_value(row, "TargetPrice", "Target", default=0))
+    if entry <= 0:
+        entry = risk_levels["EntryPrice"]
+    if stop <= 0:
+        stop = risk_levels["StopPrice"]
+    if target <= 0:
+        target = risk_levels["TargetPrice"]
+    if rr <= 0:
+        rr = risk_levels["RiskRewardRatio"]
     ai_confidence = safe_float(row.get("AIConfidence"), default=100)
     rvol = safe_float(row.get("RVOL"))
     rvol_thresholds = rvol_thresholds_for_market(market)
     rvol_action = rvol_action_for_market(market, rvol)
     proposal_status = upper_text(row.get("ProposalStatus"))
     risk_approved = upper_text(row.get("RiskApproved"))
+    reject_reason = upper_text(row.get("RejectReason"))
+    trend_filter_passed = trend_filter_passes(row)
+    bar_state = daily_bar_state(row)
+    bar_confirmed = bar_state == "CONFIRMED"
 
     if not symbol:
         blocking.append("Missing symbol")
@@ -234,11 +333,25 @@ def evaluate_candidate_eligibility(
     else:
         passed.append("Valid entry price")
 
-    if proposal_status in RISK_REJECTED_STATUSES or risk_approved == "FALSE":
+    if (
+        proposal_status in RISK_REJECTED_STATUSES
+        or (
+            risk_approved == "FALSE"
+            and not (
+                proposal_status == "NO_PROPOSAL"
+                and reject_reason.startswith("QUEUE_CLASS_")
+            )
+        )
+    ):
         blocking.append("Risk Manager rejected")
 
     if cfg.extended_is_hard_block and is_extended(row):
         blocking.append("Extended or chasing setup")
+
+    if not trend_filter_passed:
+        blocking.append("Trend filter not passed")
+    else:
+        passed.append("Trend filter passed")
 
     if has_skip_signal(row):
         blocking.append("Scanner/lifecycle SKIP")
@@ -312,16 +425,23 @@ def evaluate_candidate_eligibility(
     queue_class = "IGNORE"
     eligible_buy = False
     eligible_watch = False
+    strategy_buy_eligible = bool(
+        not hard_blocked
+        and buy_lifecycle_ok
+        and priority_score >= cfg.buy_min_priority_score
+        and rr >= cfg.buy_min_rr
+        and has_valid_order_prices
+        and rvol_action == "BUY"
+    )
 
-    if not hard_blocked and buy_lifecycle_ok:
-        if (
-            priority_score >= cfg.buy_min_priority_score
-            and rr >= cfg.buy_min_rr
-            and has_valid_order_prices
-            and rvol_action == "BUY"
-        ):
-            queue_class = "BUY"
-            eligible_buy = True
+    if strategy_buy_eligible and bar_confirmed:
+        queue_class = "BUY"
+        eligible_buy = True
+        passed.append("Daily bar confirmed")
+    elif strategy_buy_eligible:
+        queue_class = "PREPARE"
+        eligible_watch = True
+        warnings.append("Daily bar is not confirmed")
 
     if (
         queue_class == "IGNORE"
@@ -356,6 +476,14 @@ def evaluate_candidate_eligibility(
     elif queue_class == "WATCH":
         passed.append("Queue class WATCH")
 
+    buy_readiness_status = (
+        "READY"
+        if strategy_buy_eligible and bar_confirmed
+        else "WAIT_CONFIRMATION"
+        if strategy_buy_eligible
+        else "NOT_READY"
+    )
+
     return EligibilityResult(
         queue_class=queue_class,
         eligible_for_buy_queue=eligible_buy,
@@ -373,6 +501,11 @@ def evaluate_candidate_eligibility(
         rvol_prepare_threshold=rvol_thresholds["PREPARE"],
         rvol_buy_threshold=rvol_thresholds["BUY"],
         rvol_action=rvol_action,
+        trend_filter_passed=trend_filter_passed,
+        daily_bar_state=bar_state,
+        bar_confirmed=bar_confirmed,
+        strategy_buy_eligible=strategy_buy_eligible,
+        buy_readiness_status=buy_readiness_status,
     )
 
 
@@ -450,7 +583,7 @@ def apply_eligibility_policy(
     if dataframe is None or dataframe.empty:
         return pd.DataFrame() if dataframe is None else dataframe.copy()
 
-    data = dataframe.copy()
+    data = add_indicative_risk_levels(dataframe)
     results = [
         evaluate_candidate_eligibility(row, config)
         for _, row in data.iterrows()
@@ -501,6 +634,20 @@ def apply_eligibility_policy(
         for result in results
     ]
     data["RVOLAction"] = [result.rvol_action for result in results]
+    data["TrendFilterPassed"] = [
+        result.trend_filter_passed
+        for result in results
+    ]
+    data["DailyBarState"] = [result.daily_bar_state for result in results]
+    data["BarConfirmed"] = [result.bar_confirmed for result in results]
+    data["StrategyBuyEligible"] = [
+        result.strategy_buy_eligible
+        for result in results
+    ]
+    data["BuyReadinessStatus"] = [
+        result.buy_readiness_status
+        for result in results
+    ]
     if "CrossAgeSource" not in data.columns:
         data["CrossAgeSource"] = ""
     else:

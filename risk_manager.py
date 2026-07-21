@@ -308,7 +308,7 @@ def normalize_portfolio_context(row: Mapping[str, Any], portfolio: Mapping[str, 
 
 
 def select_entry_price(row: Mapping[str, Any]) -> float:
-    for column in ("Entry", "Price", "Close"):
+    for column in ("EntryPrice", "Entry", "Price", "Close"):
         value = safe_float(get_value(row, column, default=0))
 
         if value > 0:
@@ -321,7 +321,9 @@ def select_stop_price(row: Mapping[str, Any], entry: float, action: str, config:
     if action not in {"BUY", "ADD"} or entry <= 0:
         return 0, "not_applicable"
 
-    raw_stop = safe_float(get_value(row, "Stop", "StopLoss", default=0))
+    raw_stop = safe_float(
+        get_value(row, "StopPrice", "Stop", "StopLoss", default=0)
+    )
 
     if raw_stop > 0:
         if raw_stop >= entry:
@@ -345,7 +347,9 @@ def select_target_price(row: Mapping[str, Any], entry: float, stop: float, actio
     if action not in {"BUY", "ADD"} or entry <= 0 or stop <= 0:
         return 0, "not_applicable"
 
-    raw_target = safe_float(get_value(row, "Target", default=0))
+    raw_target = safe_float(
+        get_value(row, "TargetPrice", "Target", default=0)
+    )
 
     if raw_target > 0:
         return raw_target, "provided"
@@ -357,7 +361,79 @@ def select_target_price(row: Mapping[str, Any], entry: float, stop: float, actio
 
     risk_per_share = entry - stop
 
+    planned_rr = safe_float(
+        get_value(row, "RR", "RiskRewardRatio", default=0)
+    )
+    if planned_rr > 0:
+        return entry + (risk_per_share * planned_rr), "planned_rr"
+
     return entry + (risk_per_share * config.min_rr), "minimum_rr"
+
+
+def indicative_risk_levels(
+    row: Mapping[str, Any],
+    config: RiskConfig | Mapping[str, Any] | None = None,
+) -> dict[str, float]:
+    """Return reusable BUY planning levels without creating an order proposal."""
+
+    cfg = normalize_config(config)
+    entry = select_entry_price(row)
+    stop, _ = select_stop_price(row, entry, "BUY", cfg)
+    target, _ = select_target_price(row, entry, stop, "BUY", cfg)
+    stop_distance_pct = (
+        (entry - stop) / entry * 100
+        if entry > 0 and 0 < stop < entry
+        else 0
+    )
+    reward_distance_pct = (
+        (target - entry) / entry * 100
+        if entry > 0 and target > entry
+        else 0
+    )
+    rr = (
+        (target - entry) / (entry - stop)
+        if entry > 0 and target > entry and 0 < stop < entry
+        else 0
+    )
+    return {
+        "EntryPrice": round(entry, 6),
+        "StopPrice": round(stop, 6),
+        "TargetPrice": round(target, 6),
+        "StopDistancePct": round(stop_distance_pct, 4),
+        "RewardDistancePct": round(reward_distance_pct, 4),
+        "RiskRewardRatio": round(rr, 4),
+    }
+
+
+def add_indicative_risk_levels(
+    dataframe: pd.DataFrame | None,
+    config: RiskConfig | Mapping[str, Any] | None = None,
+) -> pd.DataFrame:
+    """Fill missing planning levels using the Risk Manager's existing rules."""
+
+    if dataframe is None:
+        return pd.DataFrame()
+
+    data = dataframe.copy()
+    if data.empty:
+        return data
+
+    levels = pd.DataFrame(
+        [
+            indicative_risk_levels(row.to_dict(), config=config)
+            for _, row in data.iterrows()
+        ],
+        index=data.index,
+    )
+    for column in levels.columns:
+        if column not in data.columns:
+            data[column] = levels[column]
+            continue
+
+        existing = pd.to_numeric(data[column], errors="coerce")
+        data[column] = existing.where(existing > 0, levels[column])
+
+    return data
 
 
 def round_quantity(qty: float, symbol: str, market: str, config: RiskConfig, allow_set_fractional_exit: bool = False) -> float:

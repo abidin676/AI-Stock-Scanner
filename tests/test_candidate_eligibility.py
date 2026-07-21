@@ -2,6 +2,7 @@ import pandas as pd
 import pytest
 
 from candidate_eligibility import (
+    daily_bar_state,
     evaluate_candidate_eligibility,
     is_buy_queue_candidate,
     is_watch_queue_candidate,
@@ -20,6 +21,8 @@ def ranked_row(**overrides):
         "AIConfidence": 72,
         "EMA9": 11,
         "EMA20": 10,
+        "EMA50": 9.5,
+        "EMA20Improving": True,
         "DaysSinceEMA9CrossEMA20": 0,
         "LatestPriceDate": "2026-07-17",
         "CrossDate": "2026-07-17",
@@ -235,3 +238,22 @@ def test_cross_age_two_can_enter_buy_queue():
 
     assert normalized.iloc[0]["FreshCrossEligible"]
     assert buy_queue["Symbol"].tolist() == ["AGE2.BK"]
+
+
+@pytest.mark.parametrize(
+    ("scan_completed_at", "expected"),
+    [
+        ("2026-07-21 16:25:00", "LIVE"),
+        ("2026-07-21 16:45:00", "CONFIRMED"),
+    ],
+)
+def test_set_daily_bar_state_uses_close_confirmation_time(
+    scan_completed_at,
+    expected,
+):
+    row = ranked_row(
+        LatestPriceDate="2026-07-21",
+        ScanCompletedAt=scan_completed_at,
+    )
+
+    assert daily_bar_state(row) == expected

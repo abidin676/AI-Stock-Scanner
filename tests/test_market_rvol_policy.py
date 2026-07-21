@@ -28,6 +28,7 @@ def actionable_row(market, rvol, **overrides):
         "Market": market,
         "EMA9": 10.2,
         "EMA20": 10.0,
+        "EMA50": 9.5,
         "PreviousEMA9": 9.8,
         "PreviousEMA20": 10.0,
         "BullishCrossEvent": True,

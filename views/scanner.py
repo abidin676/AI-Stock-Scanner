@@ -7,7 +7,12 @@ import sys
 import pandas as pd
 import streamlit as st
 
-from candidate_eligibility import split_candidate_queues
+from candidate_eligibility import (
+    apply_eligibility_policy,
+    daily_bar_state,
+    split_candidate_queues,
+    trend_filter_passes,
+)
 from config import (
     MAX_FRESH_CROSS_DAYS,
     MAX_WORKERS,
@@ -5180,14 +5185,16 @@ AI_MAIN_ACTIONS = [
 
 AI_ACTION_ORDER = {
     "BUY": 1,
-    "PREPARE": 2,
-    "EXIT": 3,
-    "HOLD": 4,
-    "WATCH": 5,
+    "WAIT_CONFIRMATION": 2,
+    "PREPARE": 3,
+    "EXIT": 4,
+    "HOLD": 5,
+    "WATCH": 6,
 }
 
 AI_ACTION_LABELS = {
     "BUY": "🟢 ซื้อได้",
+    "WAIT_CONFIRMATION": "🟠 รอยืนยันปิดแท่ง",
     "PREPARE": "🟡 ใกล้ซื้อ",
     "WATCH": "👀 เฝ้าดู",
     "HOLD": "🔵 ถือ",
@@ -5248,7 +5255,7 @@ SIMPLE_DASHBOARD_WATCH_COLUMNS = [
 ]
 
 DEFAULT_SHOW_ADVANCED_DETAILS = False
-PURCHASE_ACTIONS = {"BUY", "PREPARE"}
+PURCHASE_ACTIONS = {"BUY", "WAIT_CONFIRMATION", "PREPARE"}
 PURCHASE_EMPTY_STATE = (
     "วันนี้ยังไม่มีหุ้นที่พร้อมซื้อ — รอ Setup และ Volume ยืนยัน"
 )
@@ -5468,6 +5475,8 @@ def simple_action_label(action):
         return "ไม่เข้าเกณฑ์"
     if action == "BUY":
         return "ซื้อได้"
+    if action == "WAIT_CONFIRMATION":
+        return "รอยืนยันปิดแท่ง"
     if action in {"PREPARE", "NEAR BUY"}:
         return "ใกล้ซื้อ"
     if action == "WATCH":
@@ -5481,9 +5490,10 @@ def simple_action_order(action):
 
     return {
         "BUY": 1,
-        "PREPARE": 2,
-        "WATCH": 3,
-        "AVOID": 4,
+        "WAIT_CONFIRMATION": 2,
+        "PREPARE": 3,
+        "WATCH": 4,
+        "AVOID": 5,
     }.get(
         ai_action_key(action),
         4,
@@ -5598,7 +5608,16 @@ def risk_passed_for_simple(row):
 def risk_approved_for_buy_now(row):
 
     if row_value(row, "RiskApproved", default=None) is not None:
-        return row_bool(row, "RiskApproved")
+        if row_bool(row, "RiskApproved"):
+            return True
+        queue_only_no_proposal = (
+            row_text(row, "ProposalStatus").upper() == "NO_PROPOSAL"
+            and row_text(row, "RejectReason").upper().startswith(
+                "QUEUE_CLASS_"
+            )
+        )
+        if not queue_only_no_proposal:
+            return False
 
     return risk_passed_for_simple(row)
 
@@ -5635,6 +5654,7 @@ def build_simple_readiness_checklist(row):
     rvol = row_number_or_none(row, "RVOL", "rvol")
     expansion = row_number_or_none(row, "ExpansionScore")
     rvol_context = market_rvol_context(row)
+    bar_state = daily_bar_state(row)
 
     ema20_ready = (
         row_bool(row, "EMA20Improving")
@@ -5675,6 +5695,12 @@ def build_simple_readiness_checklist(row):
             "passed": ema20_ready,
         },
         {
+            "key": "trend_filter",
+            "label": "Trend filter ผ่าน",
+            "missing": "รอ Trend filter ผ่าน",
+            "passed": trend_filter_passes(row),
+        },
+        {
             "key": "rsi_zone",
             "label": "RSI อยู่ในโซน",
             "missing": "รอ RSI กลับเข้าโซน",
@@ -5709,6 +5735,12 @@ def build_simple_readiness_checklist(row):
             "label": "RR เหมาะสม",
             "missing": "Risk/Reward ยังไม่เหมาะ",
             "passed": safe_number(row_value(row, "RR", "RiskRewardRatio", default=0)) >= 1.5,
+        },
+        {
+            "key": "bar_confirmed",
+            "label": "แท่งวันปิดยืนยันแล้ว",
+            "missing": "รอยืนยันปิดแท่ง",
+            "passed": bar_state == "CONFIRMED",
         },
     ]
 
@@ -5750,6 +5782,13 @@ def simple_next_action(row, status=None):
     missing = status.get("missing", [])
     ema_context = ema_check_context(row)
 
+    if (
+        row_bool(row, "StrategyBuyEligible")
+        and action in {"BUY", "PREPARE"}
+        and not row_bool(row, "BarConfirmed")
+    ):
+        return "รอยืนยันปิดแท่ง"
+
     if action == "EXIT":
         return "ควรขาย"
 
@@ -5782,6 +5821,14 @@ def daily_action_for_row(row):
     status = simple_checklist_status(row)
     is_fresh_cross = ema_check_context(row)["IsFreshEMA9Cross"]
     rvol_context = market_rvol_context(row)
+
+    if (
+        row_bool(row, "StrategyBuyEligible")
+        and action in {"BUY", "PREPARE"}
+    ):
+        if row_bool(row, "BarConfirmed"):
+            return "BUY"
+        return "WAIT_CONFIRMATION"
 
     if not is_fresh_cross:
         if action in {"BUY", "PREPARE", "WATCH", "HOLD"}:
@@ -5911,7 +5958,7 @@ def build_simple_dashboard_sections(ai_decisions, risk_proposals=None):
             list(zip(canonical["Symbol"], canonical["Market"])),
             index=canonical.index,
         ).isin(buy_keys)
-        & (display_actions == "PREPARE")
+        & display_actions.isin({"WAIT_CONFIRMATION", "PREPARE"})
     ].copy()
     near_buy_keys = set(
         zip(
@@ -5943,6 +5990,7 @@ def prepare_daily_candidates(ai_decisions, risk_proposals=None):
         ai_decisions,
         risk_proposals,
     )
+    data = apply_eligibility_policy(data)
 
     if data.empty:
         return data
