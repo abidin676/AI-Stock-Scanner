@@ -19,7 +19,11 @@ from paper_broker import (
     load_paper_broker_config,
 )
 from paper_portfolio import calculate_portfolio_summary, load_paper_account, load_paper_portfolio
-from paper_trading_robot import AUDIT_COLUMNS, ROBOT_AUDIT_FILE
+from paper_trading_robot import (
+    AUDIT_COLUMNS,
+    ROBOT_AUDIT_FILE,
+    exit_reason_label,
+)
 
 
 DISPLAY_STATUSES = ["PENDING", "APPROVED", "FILLED", "REJECTED", "CANCELLED", "EXPIRED"]
@@ -66,11 +70,12 @@ def build_paper_trading_status_table(
         order = order_by_proposal.get(proposal_id, {})
         if str(order.get("Status", order.get("OrderStatus", ""))).upper() == "FILLED":
             status = "FILLED"
-        reason = (
+        raw_reason = (
             str(row.get("RejectedReason", "")).strip()
             or str(row.get("AutomationReason", "")).strip()
             or str(row.get("RiskManagerReason", "")).strip()
         )
+        reason = exit_reason_label(raw_reason)
         records.append(
             {
                 "ProposalId": proposal_id,
@@ -254,4 +259,11 @@ def paper_trading_page() -> None:
         "StopPrice", "TargetPrice", "HighestPrice", "TrailingStopPrice", "ExitReason",
         "ExitTriggeredTime", "PositionStatus",
     ]
-    st.dataframe(portfolio[[column for column in columns if column in portfolio.columns]], width="stretch", hide_index=True)
+    visible_portfolio = portfolio[
+        [column for column in columns if column in portfolio.columns]
+    ].copy()
+    if "ExitReason" in visible_portfolio.columns:
+        visible_portfolio["ExitReason"] = visible_portfolio["ExitReason"].map(
+            exit_reason_label
+        )
+    st.dataframe(visible_portfolio, width="stretch", hide_index=True)

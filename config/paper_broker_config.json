@@ -28,5 +28,7 @@
   "execution_mode": "MANUAL",
   "trailing_stop_enabled": true,
   "trailing_stop_pct": 5.0,
+  "three_red_days_exit_enabled": true,
+  "three_red_days_required": 3,
   "paper_broker_version": "2.0"
 }

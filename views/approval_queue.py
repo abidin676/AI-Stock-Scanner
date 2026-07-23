@@ -3,6 +3,8 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+from paper_trading_robot import exit_reason_label
+
 from approval_queue import (
     APPROVAL_HISTORY_FILE,
     APPROVAL_QUEUE_FILE,
@@ -206,6 +208,10 @@ def render_detail_tabs(row):
         c4.metric("Order Value", f"{safe_number(row['ProposedOrderValue']):,.2f}")
         st.write(f"Created: {row['CreatedTime']}")
         st.write(f"Expires: {row['ExpireTime']}")
+        if str(row.get("AutomationType", "")).upper() == "EXIT":
+            st.write(
+                f"Exit reason: {exit_reason_label(row.get('AutomationReason', '')) or 'N/A'}"
+            )
 
     with ai_tab:
         c1, c2, c3 = st.columns(3)

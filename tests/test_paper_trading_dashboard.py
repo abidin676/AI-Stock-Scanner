@@ -2,6 +2,7 @@ import pandas as pd
 from streamlit.testing.v1 import AppTest
 
 from paper_broker import PaperBrokerConfig, load_paper_broker_config
+from paper_trading_robot import exit_reason_label
 from views.approval_queue import display_status
 from views.paper_trading import DISPLAY_STATUSES, build_paper_trading_status_table
 
@@ -13,8 +14,14 @@ def render_paper_trading_page():
 
 
 def test_paper_config_defaults_to_paper_only():
-    assert PaperBrokerConfig().paper_only is True
-    assert load_paper_broker_config().paper_only is True
+    default_config = PaperBrokerConfig()
+    loaded_config = load_paper_broker_config()
+
+    assert default_config.paper_only is True
+    assert loaded_config.paper_only is True
+    assert default_config.three_red_days_exit_enabled is True
+    assert loaded_config.three_red_days_exit_enabled is True
+    assert loaded_config.three_red_days_required == 3
 
 
 def test_paper_trading_page_renders_without_traceback():
@@ -67,3 +74,25 @@ def test_hard_gate_failures_remain_visible_as_rejected_audit_rows():
     assert len(table) == 1
     assert table.iloc[0]["Status"] == "REJECTED"
     assert table.iloc[0]["Reason"] == "CROSS_AGE_5"
+
+
+def test_three_red_days_exit_reason_is_displayed_in_thai():
+    queue = pd.DataFrame(
+        [
+            {
+                "ProposalId": "exit-1",
+                "Symbol": "EXIT.BK",
+                "Market": "SET",
+                "Action": "EXIT",
+                "AutomationType": "EXIT",
+                "AutomationReason": "THREE_RED_DAYS",
+                "Status": "PENDING_APPROVAL",
+                "ScanRunId": "scan-exit",
+            }
+        ]
+    )
+
+    table = build_paper_trading_status_table(queue, pd.DataFrame(), pd.DataFrame())
+
+    assert exit_reason_label("THREE_RED_DAYS") == "ปิดแดงต่อเนื่อง 3 วัน"
+    assert table.iloc[0]["Reason"] == "ปิดแดงต่อเนื่อง 3 วัน"

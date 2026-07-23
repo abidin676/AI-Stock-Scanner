@@ -47,7 +47,7 @@ The first execution scope is SET and is permanently paper-only. The robot reuses
 - Score and priority only rank candidates; they cannot bypass a hard gate.
 - A Risk Manager pass creates `PENDING` only. No order is filled until a user explicitly clicks `Approve` and then confirms `Fill Paper Order` on the Paper Trading dashboard.
 - Duplicate proposals are blocked by `Symbol + ScanRunId`. Max positions, total exposure, available cash, and cash reserve are checked before a pending proposal is created.
-- Filled paper positions track the configured stop loss, target, highest price, and trailing stop. Exit triggers create a new pending exit proposal and still require manual approval and fill.
+- Filled paper positions track the configured stop loss, target, highest price, and trailing stop. When enabled, three consecutive red daily candles (`Close < Open`) add the `THREE_RED_DAYS` exit rule; hard stop, trailing stop, and target keep their existing higher priority. Every exit trigger creates a pending SET paper proposal and still requires manual approval and fill.
 - Safety config is locked to `paper_only=true` and `execution_mode=MANUAL`; the Paper Broker only creates simulated `MARKET_SIMULATED` orders.
 - `output/paper_trading_robot_audit.csv` records every accepted or excluded candidate and its primary reason. `output/paper_trading_robot_proposals.csv` records robot proposals passed to Risk Manager/Approval Queue.
 

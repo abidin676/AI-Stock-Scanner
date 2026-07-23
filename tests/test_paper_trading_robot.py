@@ -1,11 +1,18 @@
 from datetime import datetime
+import json
 
 import pandas as pd
 import pytest
 
 from approval_queue import approve_proposal, load_approval_queue
-from paper_broker import PaperBrokerConfig, create_order
-from paper_trading_robot import run_paper_trading_robot, update_exit_tracking
+from paper_broker import PaperBrokerConfig, create_order, load_paper_broker_config
+from paper_trading_robot import (
+    THREE_RED_DAYS_EXIT_REASON,
+    consecutive_red_days,
+    load_fresh_position_daily_histories,
+    run_paper_trading_robot,
+    update_exit_tracking,
+)
 from risk_manager import RiskConfig
 
 
@@ -74,6 +81,7 @@ def run_robot(rows, tmp_path, **kwargs):
         paper_portfolio=kwargs.pop("paper_portfolio", pd.DataFrame()),
         risk_config=kwargs.pop("risk_config", RiskConfig()),
         paper_config=kwargs.pop("paper_config", PaperBrokerConfig()),
+        daily_histories=kwargs.pop("daily_histories", {}),
         now=datetime(2026, 7, 18, 9, 0),
         persist=False,
         **paths(tmp_path),
@@ -157,6 +165,35 @@ def open_position(symbol, value=10000):
     }
 
 
+def daily_bars(*candles):
+    return pd.DataFrame(
+        [
+            {
+                "date": f"2026-07-{17 - len(candles) + index:02d}",
+                "open": open_price,
+                "close": close_price,
+            }
+            for index, (open_price, close_price) in enumerate(candles, start=1)
+        ]
+    )
+
+
+def tracked_position(symbol="EXIT.BK"):
+    return pd.DataFrame(
+        [
+            {
+                **open_position(symbol),
+                "AverageCost": 10,
+                "LastPrice": 10,
+                "StopPrice": 9,
+                "TargetPrice": 13,
+                "HighestPrice": 10,
+                "TrailingStopPrice": 0,
+            }
+        ]
+    )
+
+
 def test_max_positions_is_checked_before_pending_proposal(tmp_path):
     portfolio = pd.DataFrame([open_position(f"P{i}.BK") for i in range(5)])
     result = run_robot(
@@ -234,6 +271,172 @@ def test_exit_monitor_tracks_stop_target_and_trailing(price, expected):
     assert len(triggers) == 1
     assert triggers[0]["ExitReason"] == expected
     assert updated.iloc[0]["ExitReason"] == expected
+
+
+def test_two_red_daily_bars_do_not_trigger_exit():
+    history = daily_bars((11.5, 11.0), (11.0, 10.5))
+
+    updated, triggers = update_exit_tracking(
+        tracked_position(),
+        {"EXIT.BK": 10.5},
+        PaperBrokerConfig(),
+        daily_histories={"EXIT.BK": history},
+    )
+
+    assert consecutive_red_days(history) == 2
+    assert triggers == []
+    assert updated.iloc[0]["ExitReason"] == ""
+
+
+def test_three_red_daily_bars_create_pending_exit_proposal(tmp_path):
+    history = daily_bars((12.0, 11.5), (11.5, 11.0), (11.0, 10.5))
+    price_row = robot_candidate(
+        symbol="EXIT.BK",
+        AIDecision="WATCH",
+        QueueClass="WATCH",
+        EligibleForBuyQueue=False,
+        BaseEligible=False,
+        StrategySignal="WATCH",
+        Price=10.5,
+    )
+
+    result = run_robot(
+        [price_row],
+        tmp_path,
+        paper_portfolio=tracked_position(),
+        paper_account=account(cash=90000),
+        daily_histories={"EXIT.BK": history},
+    )
+    exit_proposal = result.proposals[
+        result.proposals["AutomationType"] == "EXIT"
+    ].iloc[0]
+
+    assert exit_proposal["ProposalAction"] == "EXIT"
+    assert exit_proposal["AutomationReason"] == THREE_RED_DAYS_EXIT_REASON
+    assert exit_proposal["ProposalStatus"] == "PENDING_APPROVAL"
+    assert result.queue.iloc[0]["Status"] == "PENDING_APPROVAL"
+    assert result.queue.iloc[0]["AutomationReason"] == THREE_RED_DAYS_EXIT_REASON
+    assert result.queue.iloc[0]["AIReason"] == "ปิดแดงต่อเนื่อง 3 วัน"
+    assert result.portfolio.iloc[0]["PositionStatus"] == "OPEN"
+
+
+def test_green_daily_bar_resets_consecutive_red_count():
+    history = daily_bars(
+        (12.0, 11.5),
+        (11.4, 11.7),
+        (11.7, 11.2),
+        (11.2, 10.7),
+    )
+
+    _, triggers = update_exit_tracking(
+        tracked_position(),
+        {"EXIT.BK": 10.7},
+        PaperBrokerConfig(),
+        daily_histories={"EXIT.BK": history},
+    )
+
+    assert consecutive_red_days(history) == 2
+    assert triggers == []
+
+
+def test_stop_loss_has_priority_over_three_red_days():
+    history = daily_bars((10.0, 9.7), (9.7, 9.2), (9.2, 8.5))
+
+    _, triggers = update_exit_tracking(
+        tracked_position(),
+        {"EXIT.BK": 8.5},
+        PaperBrokerConfig(),
+        daily_histories={"EXIT.BK": history},
+    )
+
+    assert len(triggers) == 1
+    assert triggers[0]["ExitReason"] == "STOP_LOSS"
+
+
+def test_three_red_days_exit_can_be_disabled():
+    history = daily_bars((12.0, 11.5), (11.5, 11.0), (11.0, 10.5))
+
+    _, triggers = update_exit_tracking(
+        tracked_position(),
+        {"EXIT.BK": 10.5},
+        PaperBrokerConfig(three_red_days_exit_enabled=False),
+        daily_histories={"EXIT.BK": history},
+    )
+
+    assert triggers == []
+
+
+def test_three_red_days_applies_only_to_open_held_set_position():
+    history = daily_bars((12.0, 11.5), (11.5, 11.0), (11.0, 10.5))
+    not_held = tracked_position()
+    not_held.loc[0, "PositionStatus"] = "CLOSED"
+
+    _, triggers = update_exit_tracking(
+        not_held,
+        {"EXIT.BK": 10.5},
+        PaperBrokerConfig(),
+        daily_histories={"EXIT.BK": history},
+    )
+
+    assert triggers == []
+
+
+def test_three_red_days_config_loads_and_normalizes(tmp_path):
+    config_path = tmp_path / "paper_broker_config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "three_red_days_exit_enabled": True,
+                "three_red_days_required": "3",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_paper_broker_config(path=config_path)
+
+    assert config.three_red_days_exit_enabled is True
+    assert config.three_red_days_required == 3
+
+
+def test_daily_history_loader_reads_only_fresh_open_set_position_cache(
+    tmp_path,
+    monkeypatch,
+):
+    history = daily_bars((12.0, 11.5), (11.5, 11.0), (11.0, 10.5))
+    cache_path = tmp_path / "SET_HELD.csv"
+    cache_path.write_text("fixture", encoding="utf-8")
+    portfolio = pd.DataFrame(
+        [
+            open_position("HELD.BK"),
+            {**open_position("CLOSED.BK"), "PositionStatus": "CLOSED"},
+            {**open_position("AAPL"), "Market": "USA"},
+        ]
+    )
+    requested = []
+
+    def fake_cache_path(symbol, market, period, interval):
+        requested.append((symbol, market, period, interval))
+        return cache_path
+
+    monkeypatch.setattr(
+        "paper_trading_robot.price_cache_path",
+        fake_cache_path,
+    )
+    monkeypatch.setattr(
+        "paper_trading_robot.is_price_cache_fresh",
+        lambda path: True,
+    )
+    monkeypatch.setattr(
+        "paper_trading_robot.load_price_cache",
+        lambda path: history,
+    )
+
+    histories = load_fresh_position_daily_histories(portfolio)
+
+    assert requested == [("HELD.BK", "SET", "1y", "1d")]
+    assert histories["HELD.BK"].equals(history)
+    assert histories["HELD"].equals(history)
 
 
 def test_exit_trigger_creates_pending_not_automatic_fill(tmp_path):

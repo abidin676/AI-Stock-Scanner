@@ -14,7 +14,14 @@ from approval_queue import (
     load_approval_queue,
     sync_approval_queue,
 )
-from config import MAX_FRESH_CROSS_DAYS, rvol_action_for_market, rvol_thresholds_for_market
+from config import (
+    INTERVAL,
+    MAX_FRESH_CROSS_DAYS,
+    PERIOD,
+    rvol_action_for_market,
+    rvol_thresholds_for_market,
+)
+from data import is_price_cache_fresh, load_price_cache, price_cache_path
 from fresh_cross_candidates import is_candidate_extended
 from fresh_cross_policy import evaluate_fresh_cross_policy
 from paper_broker import PaperBrokerConfig, load_paper_broker_config
@@ -39,6 +46,10 @@ from runtime_io import atomic_write_csv
 PAPER_TRADING_ROBOT_VERSION = "1.0"
 ROBOT_PROPOSALS_FILE = Path("output") / "paper_trading_robot_proposals.csv"
 ROBOT_AUDIT_FILE = Path("output") / "paper_trading_robot_audit.csv"
+THREE_RED_DAYS_EXIT_REASON = "THREE_RED_DAYS"
+EXIT_REASON_LABELS = {
+    THREE_RED_DAYS_EXIT_REASON: "ปิดแดงต่อเนื่อง 3 วัน",
+}
 
 AUDIT_COLUMNS = [
     "ScanRunId",
@@ -105,6 +116,86 @@ def safe_bool(value: Any) -> bool:
     if isinstance(value, (int, float)):
         return value != 0
     return safe_upper(value) in {"TRUE", "YES", "Y", "1"}
+
+
+def exit_reason_label(value: Any) -> str:
+    reason = safe_upper(value)
+    return EXIT_REASON_LABELS.get(reason, safe_text(value))
+
+
+def consecutive_red_days(history: pd.DataFrame | None) -> int:
+    if history is None or history.empty:
+        return 0
+
+    columns = {str(column).strip().lower(): column for column in history.columns}
+    open_column = columns.get("open")
+    close_column = columns.get("close")
+    if open_column is None or close_column is None:
+        return 0
+
+    frame = history.copy()
+    date_column = columns.get("date")
+    if date_column is not None:
+        frame[date_column] = pd.to_datetime(frame[date_column], errors="coerce")
+        frame = frame.sort_values(date_column, kind="mergesort")
+    frame[open_column] = pd.to_numeric(frame[open_column], errors="coerce")
+    frame[close_column] = pd.to_numeric(frame[close_column], errors="coerce")
+
+    count = 0
+    for _, candle in frame.iloc[::-1].iterrows():
+        open_price = candle[open_column]
+        close_price = candle[close_column]
+        if (
+            pd.isna(open_price)
+            or pd.isna(close_price)
+            or float(open_price) <= 0
+            or float(close_price) <= 0
+            or float(close_price) >= float(open_price)
+        ):
+            break
+        count += 1
+    return count
+
+
+def _history_for_symbol(
+    histories: Mapping[str, pd.DataFrame] | None,
+    symbol: str,
+) -> pd.DataFrame:
+    if not histories:
+        return pd.DataFrame()
+    lookup = [symbol, symbol.removesuffix(".BK"), f"{symbol.removesuffix('.BK')}.SET"]
+    normalized = {safe_upper(key): value for key, value in histories.items()}
+    for key in lookup:
+        history = normalized.get(safe_upper(key))
+        if isinstance(history, pd.DataFrame):
+            return history
+    return pd.DataFrame()
+
+
+def load_fresh_position_daily_histories(
+    portfolio_dataframe: pd.DataFrame,
+) -> dict[str, pd.DataFrame]:
+    portfolio = normalize_paper_portfolio(portfolio_dataframe)
+    histories: dict[str, pd.DataFrame] = {}
+    if portfolio.empty:
+        return histories
+
+    open_set_positions = portfolio[
+        (portfolio["Market"].astype(str).str.upper() == "SET")
+        & (portfolio["PositionStatus"].astype(str).str.upper() == "OPEN")
+        & (pd.to_numeric(portfolio["PositionQty"], errors="coerce").fillna(0) > 0)
+    ]
+    for symbol_value in open_set_positions["Symbol"].drop_duplicates():
+        symbol = safe_upper(symbol_value)
+        cache_path = price_cache_path(symbol, "SET", PERIOD, INTERVAL)
+        if not is_price_cache_fresh(cache_path):
+            continue
+        history = load_price_cache(cache_path)
+        if history.empty:
+            continue
+        histories[symbol] = history
+        histories[symbol.removesuffix(".BK")] = history
+    return histories
 
 
 def parse_blockers(value: Any) -> set[str]:
@@ -276,19 +367,40 @@ def update_exit_tracking(
     prices: Mapping[str, Any],
     config: PaperBrokerConfig | Mapping[str, Any] | None = None,
     now: datetime | None = None,
+    daily_histories: Mapping[str, pd.DataFrame] | None = None,
 ) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
     cfg = config if isinstance(config, PaperBrokerConfig) else load_paper_broker_config(overrides=config)
+    required_red_days = max(int(safe_float(cfg.three_red_days_required, 3)), 1)
     portfolio = normalize_paper_portfolio(portfolio_dataframe)
     triggers: list[dict[str, Any]] = []
     stamp = (now or datetime.now()).isoformat(timespec="seconds")
 
     for idx, position in portfolio.iterrows():
-        if safe_upper(position.get("Market")) != "SET" or safe_upper(position.get("PositionStatus")) != "OPEN":
+        if (
+            safe_upper(position.get("Market")) != "SET"
+            or safe_upper(position.get("PositionStatus")) != "OPEN"
+            or safe_float(position.get("PositionQty")) <= 0
+        ):
             continue
 
         symbol = safe_upper(position.get("Symbol"))
-        lookup = [symbol, symbol.removesuffix(".BK"), f"{symbol}.SET"]
+        lookup = [
+            symbol,
+            symbol.removesuffix(".BK"),
+            f"{symbol.removesuffix('.BK')}.SET",
+        ]
+        daily_history = _history_for_symbol(daily_histories, symbol)
         current = next((safe_float(prices.get(key)) for key in lookup if safe_float(prices.get(key)) > 0), 0.0)
+        if current <= 0 and not daily_history.empty:
+            close_columns = {
+                str(column).strip().lower(): column
+                for column in daily_history.columns
+            }
+            close_column = close_columns.get("close")
+            if close_column is not None:
+                closes = pd.to_numeric(daily_history[close_column], errors="coerce").dropna()
+                if not closes.empty:
+                    current = safe_float(closes.iloc[-1])
         if current <= 0:
             continue
 
@@ -315,6 +427,11 @@ def update_exit_tracking(
             reason = "TRAILING_STOP"
         elif target > 0 and current >= target:
             reason = "TARGET_REACHED"
+        elif (
+            cfg.three_red_days_exit_enabled
+            and consecutive_red_days(daily_history) >= required_red_days
+        ):
+            reason = THREE_RED_DAYS_EXIT_REASON
 
         if reason:
             portfolio.at[idx, "ExitReason"] = reason
@@ -350,6 +467,7 @@ def run_paper_trading_robot(
     proposals_path: Path = ROBOT_PROPOSALS_FILE,
     audit_path: Path = ROBOT_AUDIT_FILE,
     portfolio_path: Path = PAPER_PORTFOLIO_FILE,
+    daily_histories: Mapping[str, pd.DataFrame] | None = None,
     now: datetime | None = None,
     persist: bool = True,
 ) -> PaperRobotResult:
@@ -499,7 +617,18 @@ def run_paper_trading_robot(
         )
 
     prices = _latest_prices(source)
-    portfolio, exit_triggers = update_exit_tracking(portfolio, prices, broker_cfg, now=now)
+    position_histories = (
+        load_fresh_position_daily_histories(portfolio)
+        if daily_histories is None
+        else daily_histories
+    )
+    portfolio, exit_triggers = update_exit_tracking(
+        portfolio,
+        prices,
+        broker_cfg,
+        now=now,
+        daily_histories=position_histories,
+    )
     exit_run_id = scan_run_id or (
         safe_text(source.iloc[0].get("ScanRunId")) if not source.empty else stamp.replace(":", "").replace("-", "")
     )
@@ -534,7 +663,7 @@ def run_paper_trading_robot(
             "Stop": safe_float(trigger.get("StopPrice")),
             "Target": safe_float(trigger.get("TargetPrice")),
             "AIBlockers": "BELOW_STOP" if safe_text(trigger.get("ExitReason")) in {"STOP_LOSS", "TRAILING_STOP"} else "",
-            "AIReason": safe_text(trigger.get("ExitReason")),
+            "AIReason": exit_reason_label(trigger.get("ExitReason")),
             "AIConfidence": 100,
         }
         proposal = evaluate_risk(
@@ -549,6 +678,7 @@ def run_paper_trading_robot(
                 "RobotKey": robot_key,
                 "AutomationType": "EXIT",
                 "AutomationReason": safe_text(trigger.get("ExitReason")),
+                "AIReason": exit_reason_label(trigger.get("ExitReason")),
                 "ProposalId": proposal_id,
                 "PaperOnly": True,
                 "RobotVersion": PAPER_TRADING_ROBOT_VERSION,

@@ -262,6 +262,8 @@ class PaperBrokerConfig:
     execution_mode: str = "MANUAL"
     trailing_stop_enabled: bool = True
     trailing_stop_pct: float = 5.0
+    three_red_days_exit_enabled: bool = True
+    three_red_days_required: int = 3
     paper_broker_version: str = PAPER_BROKER_VERSION
 
 
@@ -306,6 +308,18 @@ def normalize_config(config: PaperBrokerConfig | Mapping[str, Any] | None = None
         if data.get("paper_only") is None
         else safe_bool(data.get("paper_only"))
     )
+    data["three_red_days_exit_enabled"] = (
+        True
+        if data.get("three_red_days_exit_enabled") is None
+        else safe_bool(data.get("three_red_days_exit_enabled"))
+    )
+    try:
+        data["three_red_days_required"] = max(
+            int(data.get("three_red_days_required", 3)),
+            1,
+        )
+    except (TypeError, ValueError):
+        data["three_red_days_required"] = 3
 
     if "starting_cash" in data and "initial_cash" not in data:
         data["initial_cash"] = data["starting_cash"]
